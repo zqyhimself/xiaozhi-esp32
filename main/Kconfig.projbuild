@@ -86,6 +86,12 @@ choice BOARD_TYPE
         bool "鱼鹰科技3.13LCD开发板"
     config BOARD_TYPE_LICHUANG_DEV
         bool "立创·实战派ESP32-S3开发板"
+    config BOARD_TYPE_LICHUANG_DEV_PLUS
+        bool "Lichuang Dev Plus (AXP2101, ML307)"
+        help
+            Lichuang Dev board with AXP2101 PMIC, ML307 4G module,
+            volume buttons, and headphone jack detection.
+            Target: ESP32-S3.
     config BOARD_TYPE_LICHUANG_C3_DEV
         bool "立创·实战派ESP32-C3开发板"
     config BOARD_TYPE_DF_K10
