@@ -30,6 +30,10 @@ public:
     virtual std::string GetTheme() { return current_theme_name_; }
     virtual void UpdateStatusBar(bool update_all = false);
 
+    // New virtual methods for wallpaper and animation
+    virtual void UpdateWallpaper(const std::string& name) {}
+    virtual void PlayCharacterAnimation(const std::string& anim_name, bool repeat, int fps) {}
+
     inline int width() const { return width_; }
     inline int height() const { return height_; }
 

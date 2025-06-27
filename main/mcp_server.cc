@@ -34,6 +34,7 @@ void McpServer::AddCommonTools() {
     // Backup the original tools list and restore it after adding the common tools.
     auto original_tools = std::move(tools_);
     auto& board = Board::GetInstance();
+    auto& app = Application::GetInstance(); // Get Application instance for new tools
 
     AddTool("self.get_device_status",
         "Provides the real-time information of the device, including the current status of the audio speaker, screen, battery, network, etc.\n"
@@ -102,6 +103,42 @@ void McpServer::AddCommonTools() {
                 return camera->Explain(question);
             });
     }
+
+    // ADD NEW TOOLS HERE, before restoring original_tools
+    // New tool for setting wallpaper
+    AddTool("device.screen.set_wallpaper", "设置屏幕壁纸",
+        PropertyList({Property("wallpaper_name", kPropertyTypeString, true)}),
+        [&app](const PropertyList& properties) -> ReturnValue {
+            try {
+                std::string name = properties.at("wallpaper_name").value<std::string>();
+                app.MFS_SetWallpaper(name);
+                return true;
+            } catch (const std::out_of_range& oor) {
+                ESP_LOGE(TAG, "MCP device.screen.set_wallpaper: Missing wallpaper_name property");
+                return ReturnValue(kStatusCodeInvalidParameters, "Missing wallpaper_name property");
+            }
+        });
+
+    // New tool for playing animation
+    AddTool("device.screen.play_animation", "播放屏幕动画",
+        PropertyList({
+            Property("animation_name", kPropertyTypeString, true),
+            Property("repeat", kPropertyTypeBoolean, false),
+            Property("fps", kPropertyTypeInteger, false)
+        }),
+        [&app](const PropertyList& properties) -> ReturnValue {
+            try {
+                std::string name = properties.at("animation_name").value<std::string>();
+                bool repeat = properties.count("repeat") ? properties.at("repeat").value<bool>() : true;
+                int fps = properties.count("fps") ? properties.at("fps").value<int>() : 15;
+                app.MFS_PlayAnimation(name, repeat, fps);
+                return true;
+            } catch (const std::out_of_range& oor) {
+                 ESP_LOGE(TAG, "MCP device.screen.play_animation: Missing animation_name property");
+                return ReturnValue(kStatusCodeInvalidParameters, "Missing animation_name property");
+            }
+        });
+    // END OF NEW TOOLS
 
     // Restore the original tools list to the end of the tools list
     tools_.insert(tools_.end(), original_tools.begin(), original_tools.end());

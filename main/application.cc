@@ -399,6 +399,54 @@ void Application::StopListening() {
     });
 }
 
+void Application::MFS_SetWallpaper(const std::string& wallpaper_name) {
+    ESP_LOGI(TAG, "MFS_SetWallpaper called with: %s", wallpaper_name.c_str());
+    Schedule([this, wallpaper_name]() {
+        auto display = Board::GetInstance().GetDisplay();
+        if (display) {
+            display->UpdateWallpaper(wallpaper_name);
+        } else {
+            ESP_LOGE(TAG, "Display not available for MFS_SetWallpaper");
+        }
+    });
+}
+
+void Application::MFS_PlayAnimation(const std::string& anim_name, bool repeat, int fps) {
+    ESP_LOGI(TAG, "MFS_PlayAnimation called with: %s, repeat: %d, fps: %d", anim_name.c_str(), repeat, fps);
+    Schedule([this, anim_name, repeat, fps]() {
+        auto display = Board::GetInstance().GetDisplay();
+        if (display) {
+            display->PlayCharacterAnimation(anim_name, repeat, fps);
+        } else {
+            ESP_LOGE(TAG, "Display not available for MFS_PlayAnimation");
+        }
+    });
+}
+
+void Application::MFS_SetWallpaper(const std::string& wallpaper_name) {
+    ESP_LOGI(TAG, "MFS_SetWallpaper called with: %s", wallpaper_name.c_str());
+    Schedule([this, wallpaper_name]() {
+        auto display = Board::GetInstance().GetDisplay();
+        if (display) {
+            display->UpdateWallpaper(wallpaper_name);
+        } else {
+            ESP_LOGE(TAG, "Display not available for MFS_SetWallpaper");
+        }
+    });
+}
+
+void Application::MFS_PlayAnimation(const std::string& anim_name, bool repeat, int fps) {
+    ESP_LOGI(TAG, "MFS_PlayAnimation called with: %s, repeat: %d, fps: %d", anim_name.c_str(), repeat, fps);
+    Schedule([this, anim_name, repeat, fps]() {
+        auto display = Board::GetInstance().GetDisplay();
+        if (display) {
+            display->PlayCharacterAnimation(anim_name, repeat, fps);
+        } else {
+            ESP_LOGE(TAG, "Display not available for MFS_PlayAnimation");
+        }
+    });
+}
+
 void Application::Start() {
     auto& board = Board::GetInstance();
     SetDeviceState(kDeviceStateStarting);

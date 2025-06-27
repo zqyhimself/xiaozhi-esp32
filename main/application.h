@@ -23,6 +23,8 @@
 #include "audio_processor.h"
 #include "wake_word.h"
 #include "audio_debugger.h"
+#include "display.h" // Ensure Display class is known
+
 
 #define SCHEDULE_EVENT (1 << 0)
 #define SEND_AUDIO_EVENT (1 << 1)
@@ -58,7 +60,6 @@ public:
         static Application instance;
         return instance;
     }
-    // 删除拷贝构造函数和赋值运算符
     Application(const Application&) = delete;
     Application& operator=(const Application&) = delete;
 
@@ -83,6 +84,11 @@ public:
     AecMode GetAecMode() const { return aec_mode_; }
     BackgroundTask* GetBackgroundTask() const { return background_task_; }
 
+    // Methods for MCP tools to call
+    void MFS_SetWallpaper(const std::string& wallpaper_name);
+    void MFS_PlayAnimation(const std::string& anim_name, bool repeat, int fps);
+
+
 private:
     Application();
     ~Application();
@@ -106,7 +112,6 @@ private:
     int clock_ticks_ = 0;
     TaskHandle_t check_new_version_task_handle_ = nullptr;
 
-    // Audio encode / decode
     TaskHandle_t audio_loop_task_handle_ = nullptr;
     BackgroundTask* background_task_ = nullptr;
     std::chrono::steady_clock::time_point last_output_time_;
@@ -115,7 +120,6 @@ private:
     std::condition_variable audio_decode_cv_;
     std::list<AudioStreamPacket> audio_testing_queue_;
 
-    // 新增：用于维护音频包的timestamp队列
     std::list<uint32_t> timestamp_queue_;
     std::mutex timestamp_mutex_;
 
