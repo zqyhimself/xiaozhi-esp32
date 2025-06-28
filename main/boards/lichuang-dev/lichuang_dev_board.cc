@@ -170,56 +170,6 @@ private:
                                     });
     }
 
-    void PollTouchpad() {
-        static bool was_touched = false;
-        static int64_t touch_start_time = 0;
-        const int64_t TOUCH_THRESHOLD_MS = 500;  // 触摸时长阈值，超过500ms视为长按
-        
-        ft6336_->UpdateTouchPoint();
-        auto& touch_point = ft6336_->GetTouchPoint();
-        
-        // 检测触摸开始
-        if (touch_point.num > 0 && !was_touched) {
-            was_touched = true;
-            touch_start_time = esp_timer_get_time() / 1000; // 转换为毫秒
-        } 
-        // 检测触摸释放
-        else if (touch_point.num == 0 && was_touched) {
-            was_touched = false;
-            int64_t touch_duration = (esp_timer_get_time() / 1000) - touch_start_time;
-            
-            // 只有短触才触发
-            if (touch_duration < TOUCH_THRESHOLD_MS) {
-                auto& app = Application::GetInstance();
-                if (app.GetDeviceState() == kDeviceStateStarting && 
-                    !WifiStation::GetInstance().IsConnected()) {
-                    ResetWifiConfiguration();
-                }
-                app.ToggleChatState();
-            }
-        }
-    }
-
-    void InitializeFt6336TouchPad() {
-        ESP_LOGI(TAG, "Init FT6336");
-        ft6336_ = new Ft6336(i2c_bus_, TOUCH_I2C_ADDR);
-        
-        // 创建定时器，20ms 间隔
-        esp_timer_create_args_t timer_args = {
-            .callback = [](void* arg) {
-                LichuangDevBoard* board = (LichuangDevBoard*)arg;
-                board->PollTouchpad();
-            },
-            .arg = this,
-            .dispatch_method = ESP_TIMER_TASK,
-            .name = "touchpad_timer",
-            .skip_unhandled_events = true,
-        };
-        
-        ESP_ERROR_CHECK(esp_timer_create(&timer_args, &touchpad_timer_));
-        ESP_ERROR_CHECK(esp_timer_start_periodic(touchpad_timer_, 20 * 1000));
-    }
-
     void InitializeTouch()
     {
         esp_lcd_touch_handle_t tp;
@@ -303,6 +253,7 @@ public:
         auto& thing_manager = iot::ThingManager::GetInstance();
         thing_manager.AddThing(iot::CreateThing("Speaker"));
         thing_manager.AddThing(iot::CreateThing("Screen"));
+        thing_manager.AddThing(iot::CreateThing("Wallpaper"));
 #endif
         GetBacklight()->RestoreBrightness();
     }

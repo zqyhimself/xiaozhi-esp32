@@ -4,6 +4,7 @@ set(SOURCES "audio_codecs/audio_codec.cc"
             "audio_codecs/es8311_audio_codec.cc"
             "audio_codecs/es8374_audio_codec.cc"
             "audio_codecs/es8388_audio_codec.cc"
+            "audio_processing/audio_debugger.cc"
             "led/single_led.cc"
             "led/circular_strip.cc"
             "led/gpio_led.cc"
@@ -79,6 +80,8 @@ elseif(CONFIG_BOARD_TYPE_KEVIN_YUYING_313LCD)
     set(BOARD_TYPE "kevin-yuying-313lcd")
 elseif(CONFIG_BOARD_TYPE_LICHUANG_DEV)
     set(BOARD_TYPE "lichuang-dev")
+elseif(CONFIG_BOARD_TYPE_LICHUANG_DEV_PLUS)
+    set(BOARD_TYPE "lichuang-dev-plus")
 elseif(CONFIG_BOARD_TYPE_LICHUANG_C3_DEV)
     set(BOARD_TYPE "lichuang-c3-dev")
 elseif(CONFIG_BOARD_TYPE_MAGICLICK_2P4)
@@ -123,6 +126,8 @@ elseif(CONFIG_BOARD_TYPE_ESP32S3_Touch_LCD_1_46)
     set(BOARD_TYPE "esp32-s3-touch-lcd-1.46")
 elseif(CONFIG_BOARD_TYPE_ESP32S3_Touch_LCD_3_5)
     set(BOARD_TYPE "esp32-s3-touch-lcd-3.5")
+elseif(CONFIG_BOARD_TYPE_ESP32C6_LCD_1_69)
+    set(BOARD_TYPE "waveshare-c6-lcd-1.69")
 elseif(CONFIG_BOARD_TYPE_ESP32P4_NANO)
     set(BOARD_TYPE "waveshare-p4-nano")
 elseif(CONFIG_BOARD_TYPE_ESP32P4_WIFI6_Touch_LCD_4B)
@@ -189,6 +194,8 @@ elseif(CONFIG_BOARD_TYPE_GENJUTECH_S3_1_54TFT)
     set(BOARD_TYPE "genjutech-s3-1.54tft")
 elseif(CONFIG_BOARD_TYPE_ESP32_CGC)
     set(BOARD_TYPE "esp32-cgc")
+elseif(CONFIG_BOARD_TYPE_ESP32_CGC_144)
+    set(BOARD_TYPE "esp32-cgc-144")  
 elseif(CONFIG_BOARD_TYPE_ESP_S3_LCD_EV_Board)
     set(BOARD_TYPE "esp-s3-lcd-ev-board")
 elseif(CONFIG_BOARD_TYPE_ZHENGCHEN_1_54TFT_WIFI)
@@ -201,6 +208,12 @@ elseif(CONFIG_BOARD_TYPE_ESP32_S3_1_54_MUMA)
     set(BOARD_TYPE "sp-esp32-s3-1.54-muma")
 elseif(CONFIG_BOARD_TYPE_ESP32_S3_1_28_BOX)
     set(BOARD_TYPE "sp-esp32-s3-1.28-box")
+elseif(CONFIG_BOARD_TYPE_OTTO_ROBOT)
+    set(BOARD_TYPE "otto-robot")
+elseif(CONFIG_BOARD_TYPE_ELECTRON_BOT)
+    set(BOARD_TYPE "electron-bot")
+elseif(CONFIG_BOARD_TYPE_BREAD_COMPACT_WIFI_CAM)
+    set(BOARD_TYPE "bread-compact-wifi-s3cam")
 endif()
 file(GLOB BOARD_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/boards/${BOARD_TYPE}/*.cc
@@ -298,12 +311,18 @@ list(APPEND FILES_TO_DOWNLOAD "panic_return.aaf" "wake.aaf")
 foreach(FILENAME IN LISTS FILES_TO_DOWNLOAD)
     set(REMOTE_FILE "${URL}/${FILENAME}")
     set(LOCAL_FILE "${SPIFFS_DIR}/${FILENAME}")
-    message(STATUS "Downloading ${FILENAME}")
-    file(DOWNLOAD ${REMOTE_FILE} ${LOCAL_FILE}
-         STATUS DOWNLOAD_STATUS)
-    list(GET DOWNLOAD_STATUS 0 STATUS_CODE)
-    if(NOT STATUS_CODE EQUAL 0)
-        message(FATAL_ERROR "Failed to download ${FILENAME} from ${URL}")
+    
+    # 检查本地文件是否存在
+    if(EXISTS ${LOCAL_FILE})
+        message(STATUS "File ${FILENAME} already exists, skipping download")
+    else()
+        message(STATUS "Downloading ${FILENAME}")
+        file(DOWNLOAD ${REMOTE_FILE} ${LOCAL_FILE}
+             STATUS DOWNLOAD_STATUS)
+        list(GET DOWNLOAD_STATUS 0 STATUS_CODE)
+        if(NOT STATUS_CODE EQUAL 0)
+            message(FATAL_ERROR "Failed to download ${FILENAME} from ${URL}")
+        endif()
     endif()
 endforeach()
 
