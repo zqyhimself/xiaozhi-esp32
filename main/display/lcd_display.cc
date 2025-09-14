@@ -371,7 +371,7 @@ void LcdDisplay::SetupUI() {
     status_bar_ = lv_obj_create(container_);
     lv_obj_set_size(status_bar_, LV_HOR_RES, LV_SIZE_CONTENT);
     lv_obj_set_style_radius(status_bar_, 0, 0);
-    lv_obj_set_style_bg_color(status_bar_, lvgl_theme->background_color(), 0);
+    lv_obj_set_style_bg_opa(status_bar_, LV_OPA_TRANSP, 0);
     lv_obj_set_style_text_color(status_bar_, lvgl_theme->text_color(), 0);
     
     /* Content - Chat area */
@@ -764,7 +764,7 @@ void LcdDisplay::SetupUI() {
     status_bar_ = lv_obj_create(container_);
     lv_obj_set_size(status_bar_, LV_HOR_RES, LV_SIZE_CONTENT);
     lv_obj_set_style_radius(status_bar_, 0, 0);
-    lv_obj_set_style_bg_color(status_bar_, lvgl_theme->background_color(), 0);
+    lv_obj_set_style_bg_opa(status_bar_, LV_OPA_TRANSP, 0);
     lv_obj_set_style_text_color(status_bar_, lvgl_theme->text_color(), 0);
     lv_obj_set_flex_flow(status_bar_, LV_FLEX_FLOW_ROW);
     lv_obj_set_style_pad_top(status_bar_, lvgl_theme->spacing(2), 0);
@@ -1003,9 +1003,8 @@ void LcdDisplay::SetTheme(Theme* theme) {
         lv_obj_set_style_bg_color(container_, lvgl_theme->background_color(), 0);
     }
     
-    // Update status bar background color with 50% opacity
-    lv_obj_set_style_bg_opa(status_bar_, LV_OPA_50, 0);
-    lv_obj_set_style_bg_color(status_bar_, lvgl_theme->background_color(), 0);
+    // Keep status bar background transparent
+    lv_obj_set_style_bg_opa(status_bar_, LV_OPA_TRANSP, 0);
     
     // Update status bar elements
     lv_obj_set_style_text_color(network_label_, lvgl_theme->text_color(), 0);
@@ -1101,3 +1100,33 @@ void LcdDisplay::SetTheme(Theme* theme) {
     // No errors occurred. Save theme to settings
     Display::SetTheme(lvgl_theme);
 }
+
+void LcdDisplay::SetMusicInfo(const char* song_name) {
+    #if CONFIG_USE_WECHAT_MESSAGE_STYLE
+        // 微信模式下不显示歌名，保持原有聊天功能
+        return;
+    #else
+        // 非微信模式：在表情下方显示歌名
+        DisplayLockGuard lock(this);
+        if (chat_message_label_ == nullptr) {
+            return;
+        }
+        
+        if (song_name != nullptr && strlen(song_name) > 0) {
+            std::string music_text = "";
+            music_text += song_name;
+            lv_label_set_text(chat_message_label_, music_text.c_str());
+            
+            // 确保显示 emotion_label_ 和 chat_message_label_，隐藏 preview_image_
+            if (emotion_label_ != nullptr) {
+                lv_obj_clear_flag(emotion_label_, LV_OBJ_FLAG_HIDDEN);
+            }
+            if (preview_image_ != nullptr) {
+                lv_obj_add_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
+            }
+        } else {
+            // 清空歌名显示
+            lv_label_set_text(chat_message_label_, "");
+        }
+    #endif
+    }

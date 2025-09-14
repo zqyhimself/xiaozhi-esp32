@@ -14,6 +14,7 @@
 #include "display.h"
 #include "oled_display.h"
 #include "board.h"
+#include "boards/common/esp32_music.h"
 #include "settings.h"
 #include "lvgl_theme.h"
 #include "lvgl_display.h"
@@ -52,6 +53,17 @@ void McpServer::AddCommonTools() {
         PropertyList(),
         [&board](const PropertyList& properties) -> ReturnValue {
             return board.GetDeviceStatusJson();
+        });
+    
+    AddTool("self.search_music",
+        "Transfer to music playback tool.\n"
+        "Use this tool for: \n"
+        "1. When a user sends a music playback request.\n"
+        "2. When music playback related parameters are not configured in the character introduction.\n",
+        PropertyList(),
+        [&board](const PropertyList &properties) -> ReturnValue {
+            ESP_LOGW(TAG, "Use self.music.play_song tool to play music.");
+            return "Please use MPC Tool self.music.play_song tool to play music.";
         });
 
     AddTool("self.audio_speaker.set_volume", 
@@ -120,9 +132,71 @@ void McpServer::AddCommonTools() {
     }
 #endif
 
+auto music = board.GetMusic();
+    if (music)
+    {
+        AddTool("self.music.play_song",
+                "Play the specified song. When users request to play music, this tool will automatically retrieve song details and start streaming.\n"
+                "parameter:\n"
+                "  `song_name`: The name of the song to be played.\n"
+                "return:\n"
+                "  Play status information without confirmation, immediately play the song.",
+                PropertyList({Property("song_name", kPropertyTypeString)}),
+                [music](const PropertyList &properties) -> ReturnValue
+                {
+                    auto song_name = properties["song_name"].value<std::string>();
+                    if (!music->Download(song_name))
+                    {
+                        return "{\"success\": false, \"message\": \"Failed to obtain music resources\"}";
+                    }
+                    auto download_result = music->GetDownloadResult();
+                    ESP_LOGD(TAG, "Music details result: %s", download_result.c_str());
+                    return true;
+                });
+
+        AddTool("self.music.set_display_mode",
+                "Set the display mode for music playback. You can choose to display the spectrum or lyrics, for example, if the user says' open spectrum 'or' display spectrum ', the corresponding display mode will be set for' open lyrics' or 'display lyrics'.\n"
+                "parameter:\n"
+                "  `mode`: Display mode, with optional values of 'spectrum' or 'lyrics'.\n"
+                "return:\n"
+                "  Set result information.",
+                PropertyList({
+                    Property("mode", kPropertyTypeString) // Display mode: "spectrum" or "lyrics"
+                }),
+                [music](const PropertyList &properties) -> ReturnValue
+                {
+                    auto mode_str = properties["mode"].value<std::string>();
+
+                    // Convert to lowercase for comparison
+                    std::transform(mode_str.begin(), mode_str.end(), mode_str.begin(), ::tolower);
+
+                    if (mode_str == "spectrum" || mode_str == "频谱")
+                    {
+                        // Set to spectrum display mode
+                        auto esp32_music = static_cast<Esp32Music *>(music);
+                        esp32_music->SetDisplayMode(Esp32Music::DISPLAY_MODE_SPECTRUM);
+                        return "{\"success\": true, \"message\": \"Switched to spectrum display mode\"}";
+                    }
+                    else if (mode_str == "lyrics" || mode_str == "歌词")
+                    {
+                        // Set to lyrics display mode
+                        auto esp32_music = static_cast<Esp32Music *>(music);
+                        esp32_music->SetDisplayMode(Esp32Music::DISPLAY_MODE_LYRICS);
+                        return "{\"success\": true, \"message\": \"Switched to lyrics display mode\"}";
+                    }
+                    else
+                    {
+                        return "{\"success\": false, \"message\": \"Invalid display mode, please use 'spectrum' or 'lyrics'\"}";
+                    }
+
+                    return "{\"success\": false, \"message\": \"Failed to set display mode\"}";
+                });
+    }
+
     // Restore the original tools list to the end of the tools list
     tools_.insert(tools_.end(), original_tools.begin(), original_tools.end());
 }
+
 
 void McpServer::AddUserOnlyTools() {
     // System tools
@@ -172,7 +246,7 @@ void McpServer::AddUserOnlyTools() {
 
     // Display control
 #ifdef HAVE_LVGL
-    auto display = dynamic_cast<LvglDisplay*>(Board::GetInstance().GetDisplay());
+    auto display = static_cast<LvglDisplay*>(Board::GetInstance().GetDisplay());
     if (display) {
         AddUserOnlyTool("self.screen.get_info", "Information about the screen, including width, height, etc.",
             PropertyList(),
@@ -180,7 +254,7 @@ void McpServer::AddUserOnlyTools() {
                 cJSON *json = cJSON_CreateObject();
                 cJSON_AddNumberToObject(json, "width", display->width());
                 cJSON_AddNumberToObject(json, "height", display->height());
-                if (dynamic_cast<OledDisplay*>(display)) {
+                if (static_cast<OledDisplay*>(display)) {
                     cJSON_AddBoolToObject(json, "monochrome", true);
                 } else {
                     cJSON_AddBoolToObject(json, "monochrome", false);
