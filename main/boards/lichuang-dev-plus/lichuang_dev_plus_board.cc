@@ -240,6 +240,8 @@ private:
         ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(panel_io, &panel_config, &panel));
         
         esp_lcd_panel_reset(panel);
+        aw9523b_->SetOutputState(0, 0); // 关闭背光
+
         esp_lcd_panel_init(panel);
         esp_lcd_panel_invert_color(panel, true);
         esp_lcd_panel_swap_xy(panel, DISPLAY_SWAP_XY);
@@ -358,17 +360,14 @@ public:
         InitializeSpi();
         InitializeSt7789Display();
         InitializeButtons();
-        InitializeTouch();
+        //InitializeTouch();
         InitializeCamera();
     }
 
-    virtual Assets* GetAssets() override {
-        static Assets assets(ASSETS_XIAOZHI_PUHUI_COMMON_20_4_EMOJI_64);
-        return &assets;
-    }
-
     virtual AudioCodec* GetAudioCodec() override {
-        static LichuangDevPlusAudioCodec audio_codec(i2c_bus_, aw9523b_);
+        static LichuangDevPlusAudioCodec audio_codec(
+            i2c_bus_,
+            aw9523b_);
         return &audio_codec;
     }
 
