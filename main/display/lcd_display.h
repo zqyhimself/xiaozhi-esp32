@@ -3,6 +3,7 @@
 
 #include "lvgl_display.h"
 #include "gif/lvgl_gif.h"
+#include "music_player_ui.h"
 
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
@@ -32,6 +33,13 @@ protected:
     lv_obj_t* chat_message_label_ = nullptr;
     esp_timer_handle_t preview_timer_ = nullptr;
     std::unique_ptr<LvglImage> preview_image_cached_ = nullptr;
+    
+    // 音乐播放器UI
+    std::unique_ptr<MusicPlayerUI> music_player_ui_ = nullptr;
+    
+    // 音乐进度更新定时器
+    esp_timer_handle_t music_progress_timer_ = nullptr;
+    
 
     void InitializeLcdThemes();
     void SetupUI();
@@ -53,6 +61,37 @@ public:
 
     // Add set music info function
     virtual void SetMusicInfo(const char* song_name) override;
+    virtual void SetMusicDetails(const char* song_title, const char* artist, bool is_playing) override;
+    
+    // 音乐播放器功能
+    void ShowMusicPlayer();
+    void HideMusicPlayer();
+    void UpdateMusicProgress(float progress);
+    void UpdateMusicLyrics(const char* lyrics);
+    void UpdateMusicTime(const char* current_time, const char* duration);
+    void SetMusicPlayState(bool is_playing);
+    
+    // 音乐控制回调设置
+    void SetMusicControlCallbacks(
+        void (*play_pause_cb)(void*),
+        void (*previous_cb)(void*),
+        void (*next_cb)(void*),
+        void (*progress_cb)(float, void*),
+        void (*volume_cb)(int, void*),
+        void* user_data
+    );
+    
+    // 音量控制
+    void SetVolume(int volume);  // 0-100
+    int GetVolume() const;
+    
+    // 触摸音量控制
+    void EnableTouchVolumeControl(bool enable);
+    bool IsTouchVolumeControlEnabled() const;
+    
+    // 音乐进度更新
+    void StartMusicProgressUpdate();
+    void StopMusicProgressUpdate();
 };
 
 // SPI LCD显示器

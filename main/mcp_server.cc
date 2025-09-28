@@ -156,9 +156,9 @@ auto music = board.GetMusic();
                 });
 
         AddTool("self.music.set_display_mode",
-                "Set the display mode for music playback. You can choose to display the spectrum or lyrics, for example, if the user says' open spectrum 'or' display spectrum ', the corresponding display mode will be set for' open lyrics' or 'display lyrics'.\n"
+                "Set the display mode for music playback. Only lyrics mode is supported.\n"
                 "parameter:\n"
-                "  `mode`: Display mode, with optional values of 'spectrum' or 'lyrics'.\n"
+                "  `mode`: Display mode, only 'lyrics' is supported.\n"
                 "return:\n"
                 "  Set result information.",
                 PropertyList({
@@ -171,23 +171,16 @@ auto music = board.GetMusic();
                     // Convert to lowercase for comparison
                     std::transform(mode_str.begin(), mode_str.end(), mode_str.begin(), ::tolower);
 
-                    if (mode_str == "spectrum" || mode_str == "频谱")
+                    if (mode_str == "lyrics" || mode_str == "歌词")
                     {
-                        // Set to spectrum display mode
-                        auto esp32_music = static_cast<Esp32Music *>(music);
-                        esp32_music->SetDisplayMode(Esp32Music::DISPLAY_MODE_SPECTRUM);
-                        return "{\"success\": true, \"message\": \"Switched to spectrum display mode\"}";
-                    }
-                    else if (mode_str == "lyrics" || mode_str == "歌词")
-                    {
-                        // Set to lyrics display mode
+                        // Set to lyrics display mode (only mode available)
                         auto esp32_music = static_cast<Esp32Music *>(music);
                         esp32_music->SetDisplayMode(Esp32Music::DISPLAY_MODE_LYRICS);
                         return "{\"success\": true, \"message\": \"Switched to lyrics display mode\"}";
                     }
                     else
                     {
-                        return "{\"success\": false, \"message\": \"Invalid display mode, please use 'spectrum' or 'lyrics'\"}";
+                        return "{\"success\": false, \"message\": \"Invalid display mode, only 'lyrics' is supported (spectrum mode removed)\"}";
                     }
 
                     return "{\"success\": false, \"message\": \"Failed to set display mode\"}";

@@ -29,14 +29,14 @@ class Esp32Music : public Music {
 public:
     // 显示模式控制 - 移动到public区域
     enum DisplayMode {
-        DISPLAY_MODE_SPECTRUM = 0,  // 默认显示频谱
-        DISPLAY_MODE_LYRICS = 1     // 显示歌词
+        DISPLAY_MODE_LYRICS = 0     // 只显示歌词
     };
 
 private:
     std::string last_downloaded_data_;
     std::string current_music_url_;
     std::string current_song_name_;
+    std::string current_artist_;
     bool song_name_displayed_;
     std::atomic<bool> stop_flag_{false}; // 停止播放标志位
     
@@ -50,11 +50,13 @@ private:
     
     std::atomic<DisplayMode> display_mode_;
     std::atomic<bool> is_playing_;
+    std::atomic<bool> is_paused_;
     std::atomic<bool> is_downloading_;
     std::thread play_thread_;
     std::thread download_thread_;
     int64_t current_play_time_ms_;  // 当前播放时间(毫秒)
     int64_t last_frame_time_ms_;    // 上一帧的时间戳
+    int64_t total_duration_ms_;     // 歌曲总时长(毫秒)
     int total_frames_decoded_;      // 已解码的帧数
 
     // 音频缓冲区
@@ -107,6 +109,15 @@ public:
     // 显示模式控制方法
     void SetDisplayMode(DisplayMode mode);
     DisplayMode GetDisplayMode() const { return display_mode_.load(); }
+    
+    // 播放控制和进度方法
+    bool PauseStreaming();   // 暂停播放
+    bool ResumeStreaming();  // 继续播放
+    bool IsPlaying() const { return is_playing_.load(); }
+    bool IsPaused() const { return is_paused_.load(); }
+    int64_t GetCurrentPlayTimeMs() const { return current_play_time_ms_; }
+    int64_t GetTotalDurationMs() const { return total_duration_ms_; }
+    int GetTotalFrames() const { return total_frames_decoded_; }
 };
 
 #endif // ESP32_MUSIC_H

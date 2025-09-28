@@ -39,6 +39,7 @@ public:
     virtual Theme* GetTheme() { return current_theme_; }
     virtual void UpdateStatusBar(bool update_all = false);
     virtual void SetMusicInfo(const char* song_name);
+    virtual void SetMusicDetails(const char* song_title, const char* artist, bool is_playing);
     virtual void SetPowerSaveMode(bool on);
     virtual void start() {}
     virtual void clearScreen() {}  // 清除FFT显示，默认为空实现

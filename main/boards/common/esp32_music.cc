@@ -5,6 +5,7 @@
 #include "application.h"
 #include "protocols/protocol.h"
 #include "display/display.h"
+#include "display/lcd_display.h"
 
 #include <esp_log.h>
 #include <esp_heap_caps.h>
@@ -127,14 +128,14 @@ static std::string url_encode(const std::string& str) {
 }
 
 
-Esp32Music::Esp32Music() : last_downloaded_data_(), current_music_url_(), current_song_name_(),
+Esp32Music::Esp32Music() : last_downloaded_data_(), current_music_url_(), current_song_name_(), current_artist_(),
                          song_name_displayed_(false), current_lyric_url_(), lyrics_(), 
                          current_lyric_index_(-1), lyric_thread_(), is_lyric_running_(false),
-                         display_mode_(DISPLAY_MODE_LYRICS), is_playing_(false), is_downloading_(false), 
-                         play_thread_(), download_thread_(), audio_buffer_(), buffer_mutex_(), 
-                         buffer_cv_(), buffer_size_(0), mp3_decoder_(nullptr), mp3_frame_info_(), 
+                         display_mode_(DISPLAY_MODE_LYRICS), is_playing_(false), is_paused_(false), is_downloading_(false), 
+                         play_thread_(), download_thread_(), current_play_time_ms_(0), last_frame_time_ms_(0), total_duration_ms_(0),
+                         audio_buffer_(), buffer_mutex_(), buffer_cv_(), buffer_size_(0), mp3_decoder_(nullptr), mp3_frame_info_(), 
                          mp3_decoder_initialized_(false) {
-    ESP_LOGI(TAG, "Music player initialized with default spectrum display mode");
+    ESP_LOGI(TAG, "Music player initialized with lyrics display mode");
     InitializeMp3Decoder();
 }
 
@@ -254,8 +255,10 @@ bool Esp32Music::Download(const std::string& song_name, const std::string& artis
     // 清空之前的下载数据
     last_downloaded_data_.clear();
     
-    // 保存歌名用于后续显示
+    // 保存歌名用于后续显示，重置之前的信息
     current_song_name_ = song_name;
+    current_artist_ = "";  // 重置歌手信息
+    total_duration_ms_ = 0;  // 重置总时长，等待API响应更新
     
     // 第一步：请求stream_pcm接口获取音频信息
     std::string base_url = "http://http-embedded-music.miao-lab.top:2233";
@@ -277,6 +280,28 @@ bool Esp32Music::Download(const std::string& song_name, const std::string& artis
     // 打开GET连接
     if (!http->Open("GET", full_url)) {
         ESP_LOGE(TAG, "Failed to connect to music API");
+        // 显示网络连接错误信息
+        auto& board = Board::GetInstance();
+        auto display = board.GetDisplay();
+        if (display) {
+            display->SetMusicInfo("抱歉，无法连接到音乐服务");
+            // 3秒后自动隐藏
+            auto timer_args = esp_timer_create_args_t{
+                .callback = [](void* arg) {
+                    auto& board = Board::GetInstance();
+                    auto display = board.GetDisplay();
+                    if (display) {
+                        display->SetMusicInfo("");
+                    }
+                },
+                .arg = nullptr,
+                .name = "connection_error_timer"
+            };
+            esp_timer_handle_t error_timer;
+            if (esp_timer_create(&timer_args, &error_timer) == ESP_OK) {
+                esp_timer_start_once(error_timer, 3000000);
+            }
+        }
         return false;
     }
     
@@ -284,6 +309,29 @@ bool Esp32Music::Download(const std::string& song_name, const std::string& artis
     int status_code = http->GetStatusCode();
     if (status_code != 200) {
         ESP_LOGE(TAG, "HTTP GET failed with status code: %d", status_code);
+        // 显示HTTP错误信息
+        auto& board = Board::GetInstance();
+        auto display = board.GetDisplay();
+        if (display) {
+            std::string error_msg = "抱歉，音乐服务错误 (状态码: " + std::to_string(status_code) + ")";
+            display->SetMusicInfo(error_msg.c_str());
+            // 3秒后自动隐藏
+            auto timer_args = esp_timer_create_args_t{
+                .callback = [](void* arg) {
+                    auto& board = Board::GetInstance();
+                    auto display = board.GetDisplay();
+                    if (display) {
+                        display->SetMusicInfo("");
+                    }
+                },
+                .arg = nullptr,
+                .name = "http_error_timer"
+            };
+            esp_timer_handle_t error_timer;
+            if (esp_timer_create(&timer_args, &error_timer) == ESP_OK) {
+                esp_timer_start_once(error_timer, 3000000);
+            }
+        }
         http->Close();
         return false;
     }
@@ -298,6 +346,28 @@ bool Esp32Music::Download(const std::string& song_name, const std::string& artis
     // 简单的认证响应检查（可选）
     if (last_downloaded_data_.find("ESP32动态密钥验证失败") != std::string::npos) {
         ESP_LOGE(TAG, "Authentication failed for song: %s", song_name.c_str());
+        // 显示认证失败错误信息
+        auto& board = Board::GetInstance();
+        auto display = board.GetDisplay();
+        if (display) {
+            display->SetMusicInfo("抱歉，设备认证失败，请重试");
+            // 3秒后自动隐藏
+            auto timer_args = esp_timer_create_args_t{
+                .callback = [](void* arg) {
+                    auto& board = Board::GetInstance();
+                    auto display = board.GetDisplay();
+                    if (display) {
+                        display->SetMusicInfo("");
+                    }
+                },
+                .arg = nullptr,
+                .name = "auth_error_timer"
+            };
+            esp_timer_handle_t error_timer;
+            if (esp_timer_create(&timer_args, &error_timer) == ESP_OK) {
+                esp_timer_start_once(error_timer, 3000000);
+            }
+        }
         return false;
     }
     
@@ -310,12 +380,19 @@ bool Esp32Music::Download(const std::string& song_name, const std::string& artis
             cJSON* title = cJSON_GetObjectItem(response_json, "title");
             cJSON* audio_url = cJSON_GetObjectItem(response_json, "audio_url");
             cJSON* lyric_url = cJSON_GetObjectItem(response_json, "lyric_url");
+            cJSON* duration = cJSON_GetObjectItem(response_json, "duration");
             
             if (cJSON_IsString(artist)) {
+                current_artist_ = artist->valuestring;  // 存储歌手信息
                 ESP_LOGI(TAG, "Artist: %s", artist->valuestring);
             }
             if (cJSON_IsString(title)) {
+                current_song_name_ = title->valuestring;  // 更新歌名为服务器返回的准确歌名
                 ESP_LOGI(TAG, "Title: %s", title->valuestring);
+            }
+            if (cJSON_IsNumber(duration)) {
+                total_duration_ms_ = (int64_t)(duration->valuedouble * 1000);  // 转换秒为毫秒
+                ESP_LOGI(TAG, "Duration: %.0f seconds (%lld ms)", duration->valuedouble, total_duration_ms_);
             }
             
             // 检查audio_url是否有效
@@ -361,7 +438,7 @@ bool Esp32Music::Download(const std::string& song_name, const std::string& artis
                         
                         lyric_thread_ = std::thread(&Esp32Music::LyricDisplayThread, this);
                     } else {
-                        ESP_LOGI(TAG, "Lyric URL found but spectrum display mode is active, skipping lyrics");
+                        ESP_LOGI(TAG, "Lyric URL found, loading lyrics");
                     }
                 } else {
                     ESP_LOGW(TAG, "No lyric URL found for this song");
@@ -373,14 +450,88 @@ bool Esp32Music::Download(const std::string& song_name, const std::string& artis
                 // audio_url为空或无效
                 ESP_LOGE(TAG, "Audio URL not found or empty for song: %s", song_name.c_str());
                 ESP_LOGE(TAG, "Failed to find music: 没有找到歌曲 '%s'", song_name.c_str());
+                
+                // 显示错误信息给用户
+                auto& board = Board::GetInstance();
+                auto display = board.GetDisplay();
+                if (display) {
+                    // 显示音乐播放器UI并显示错误信息
+                    std::string error_message = "抱歉，没有找到歌曲《" + std::string(song_name) + "》";
+                    display->SetMusicInfo(error_message.c_str());
+                    
+                    // 延迟3秒后自动隐藏播放器
+                    auto timer_args = esp_timer_create_args_t{
+                        .callback = [](void* arg) {
+                            auto& board = Board::GetInstance();
+                            auto display = board.GetDisplay();
+                            if (display) {
+                                display->SetMusicInfo("");  // 清空显示，隐藏播放器
+                                ESP_LOGI(TAG, "Auto-hidden music player after error display");
+                            }
+                        },
+                        .arg = nullptr,
+                        .name = "music_error_timer"
+                    };
+                    
+                    esp_timer_handle_t error_timer;
+                    if (esp_timer_create(&timer_args, &error_timer) == ESP_OK) {
+                        esp_timer_start_once(error_timer, 3000000);  // 3秒后执行
+                        ESP_LOGI(TAG, "Started auto-hide timer for error message");
+                    }
+                }
+                
                 cJSON_Delete(response_json);
                 return false;
             }
         } else {
             ESP_LOGE(TAG, "Failed to parse JSON response");
+            // 显示JSON解析错误信息
+            auto& board = Board::GetInstance();
+            auto display = board.GetDisplay();
+            if (display) {
+                display->SetMusicInfo("抱歉，音乐服务响应格式错误");
+                // 3秒后自动隐藏
+                auto timer_args = esp_timer_create_args_t{
+                    .callback = [](void* arg) {
+                        auto& board = Board::GetInstance();
+                        auto display = board.GetDisplay();
+                        if (display) {
+                            display->SetMusicInfo("");
+                        }
+                    },
+                    .arg = nullptr,
+                    .name = "json_error_timer"
+                };
+                esp_timer_handle_t error_timer;
+                if (esp_timer_create(&timer_args, &error_timer) == ESP_OK) {
+                    esp_timer_start_once(error_timer, 3000000);
+                }
+            }
         }
     } else {
         ESP_LOGE(TAG, "Empty response from music API");
+        // 显示空响应错误信息
+        auto& board = Board::GetInstance();
+        auto display = board.GetDisplay();
+        if (display) {
+            display->SetMusicInfo("抱歉，音乐服务暂时不可用");
+            // 3秒后自动隐藏
+            auto timer_args = esp_timer_create_args_t{
+                .callback = [](void* arg) {
+                    auto& board = Board::GetInstance();
+                    auto display = board.GetDisplay();
+                    if (display) {
+                        display->SetMusicInfo("");
+                    }
+                },
+                .arg = nullptr,
+                .name = "empty_response_timer"
+            };
+            esp_timer_handle_t error_timer;
+            if (esp_timer_create(&timer_args, &error_timer) == ESP_OK) {
+                esp_timer_start_once(error_timer, 3000000);
+            }
+        }
     }
     
     return false;
@@ -479,14 +630,36 @@ bool Esp32Music::StopStreaming() {
     
     // 等待歌词线程结束
     if (lyric_thread_.joinable()) {
-        lyric_thread_.join();
-        ESP_LOGI(TAG, "Lyric thread joined in StopStreaming");
+        try {
+            lyric_thread_.join();
+            ESP_LOGI(TAG, "Lyric thread joined in StopStreaming");
+        } catch (const std::exception& e) {
+            ESP_LOGW(TAG, "Exception during lyric thread join: %s", e.what());
+            // 如果join失败，尝试detach避免资源泄露
+            try {
+                lyric_thread_.detach();
+                ESP_LOGW(TAG, "Lyric thread detached after join failure");
+            } catch (const std::exception& e2) {
+                ESP_LOGE(TAG, "Failed to detach lyric thread: %s", e2.what());
+            }
+        }
     }
     
     // 等待线程结束（避免重复代码，让StopStreaming也能等待线程完全停止）
     if (download_thread_.joinable()) {
-        download_thread_.join();
-        ESP_LOGI(TAG, "Download thread joined in StopStreaming");
+        try {
+            download_thread_.join();
+            ESP_LOGI(TAG, "Download thread joined in StopStreaming");
+        } catch (const std::exception& e) {
+            ESP_LOGW(TAG, "Exception during download thread join: %s", e.what());
+            // 如果join失败，尝试detach避免资源泄露
+            try {
+                download_thread_.detach();
+                ESP_LOGW(TAG, "Download thread detached after join failure");
+            } catch (const std::exception& e2) {
+                ESP_LOGE(TAG, "Failed to detach download thread: %s", e2.what());
+            }
+        }
     }
     
     // 等待播放线程结束，使用更安全的方式
@@ -519,23 +692,45 @@ bool Esp32Music::StopStreaming() {
         if (play_thread_.joinable()) {
             if (wait_count >= max_wait) {
                 ESP_LOGW(TAG, "Play thread join timeout, detaching thread");
-                play_thread_.detach();
+                try {
+                    play_thread_.detach();
+                } catch (const std::exception& e) {
+                    ESP_LOGE(TAG, "Exception during play thread detach: %s", e.what());
+                }
             } else {
-                play_thread_.join();
-                ESP_LOGI(TAG, "Play thread joined in StopStreaming");
+                try {
+                    play_thread_.join();
+                    ESP_LOGI(TAG, "Play thread joined in StopStreaming");
+                } catch (const std::exception& e) {
+                    ESP_LOGW(TAG, "Exception during play thread join: %s", e.what());
+                    // 如果join失败，尝试detach避免资源泄露
+                    try {
+                        play_thread_.detach();
+                        ESP_LOGW(TAG, "Play thread detached after join failure");
+                    } catch (const std::exception& e2) {
+                        ESP_LOGE(TAG, "Failed to detach play thread: %s", e2.what());
+                    }
+                }
             }
         }
     }
     
-    // 在线程完全结束后，只在频谱模式下停止FFT显示
-    if (display && display_mode_ == DISPLAY_MODE_SPECTRUM) {
-        display->stopFft();
-        ESP_LOGI(TAG, "Stopped FFT display in StopStreaming (spectrum mode)");
-    } else if (display) {
-        ESP_LOGI(TAG, "Not in spectrum mode, skipping FFT stop in StopStreaming");
+    // 重置MP3解码器状态，避免下次播放时有残留声音
+    if (mp3_decoder_initialized_) {
+        MP3FreeDecoder(mp3_decoder_);
+        mp3_decoder_initialized_ = false;
+        ESP_LOGI(TAG, "MP3 decoder freed and reset");
     }
     
-    ESP_LOGI(TAG, "Music streaming stop signal sent");
+    // 清理音频缓冲区
+    ClearAudioBuffer();
+    
+    // 重置播放相关变量
+    current_play_time_ms_ = 0;
+    total_frames_decoded_ = 0;
+    last_frame_time_ms_ = 0;
+    
+    ESP_LOGI(TAG, "Music streaming completely stopped and cleaned up");
     return true;
 }
 
@@ -682,13 +877,33 @@ void Esp32Music::PlayAudioStream() {
     if (!codec || !codec->output_enabled()) {
         ESP_LOGE(TAG, "Audio codec not available or not enabled");
         is_playing_ = false;
+        
+        // 通知用户播放失败
+        auto& board = Board::GetInstance();
+        auto display = board.GetDisplay();
+        if (display) {
+            display->SetChatMessage("system", "音频设备暂时不可用，请检查设备连接。");
+            ESP_LOGI(TAG, "Notified user about playback failure due to codec unavailable");
+        }
         return;
     }
     
     if (!mp3_decoder_initialized_) {
-        ESP_LOGE(TAG, "MP3 decoder not initialized");
-        is_playing_ = false;
-        return;
+        ESP_LOGW(TAG, "MP3 decoder not initialized, attempting to re-initialize");
+        if (!InitializeMp3Decoder()) {
+            ESP_LOGE(TAG, "Failed to re-initialize MP3 decoder");
+            is_playing_ = false;
+            
+            // 通知用户播放失败
+            auto& board = Board::GetInstance();
+            auto display = board.GetDisplay();
+            if (display) {
+                display->SetChatMessage("system", "抱歉，暂时无法播放这首歌曲，请稍后再试。");
+                ESP_LOGI(TAG, "Notified user about playback failure due to decoder initialization failure");
+            }
+            return;
+        }
+        ESP_LOGI(TAG, "MP3 decoder re-initialized successfully after previous cleanup");
     }
     
     
@@ -721,6 +936,16 @@ void Esp32Music::PlayAudioStream() {
     bool id3_processed = false;
     
     while (is_playing_) {
+        // 检查是否暂停
+        if (is_paused_.load()) {
+            std::unique_lock<std::mutex> lock(buffer_mutex_);
+            buffer_cv_.wait(lock, [this] { return !is_paused_.load() || !is_playing_.load(); });
+            if (!is_playing_.load()) {
+                break;  // 如果在暂停期间被停止，则退出
+            }
+            continue;
+        }
+        
         // 检查设备状态，只有在空闲状态才播放音乐
         auto& app = Application::GetInstance();
         DeviceState current_state = app.GetDeviceState();
@@ -749,21 +974,17 @@ void Esp32Music::PlayAudioStream() {
             auto& board = Board::GetInstance();
             auto display = board.GetDisplay();
             if (display) {
-                // 格式化歌名显示为《歌名》播放中...
-                std::string formatted_song_name = "《" + current_song_name_ + "》播放中...";
-                display->SetMusicInfo(formatted_song_name.c_str());
-                ESP_LOGI(TAG, "Displaying song name: %s", formatted_song_name.c_str());
+                // 使用新的统一API直接设置歌曲详细信息
+                display->SetMusicDetails(current_song_name_.c_str(), 
+                                       !current_artist_.empty() ? current_artist_.c_str() : nullptr, 
+                                       true);  // is_playing = true
+                ESP_LOGI(TAG, "Displaying song details: %s by %s", 
+                         current_song_name_.c_str(), 
+                         !current_artist_.empty() ? current_artist_.c_str() : "Unknown Artist");
                 song_name_displayed_ = true;
-            }
-
-            // 根据显示模式启动相应的显示功能
-            if (display) {
-                if (display_mode_ == DISPLAY_MODE_SPECTRUM) {
-                    display->start();
-                    ESP_LOGI(TAG, "Display start() called for spectrum visualization");
-                } else {
-                    ESP_LOGI(TAG, "Lyrics display mode active, FFT visualization disabled");
-                }
+                
+                // 根据显示模式启动相应的显示功能
+                ESP_LOGI(TAG, "Lyrics display mode active");
             }
         }
         
@@ -775,13 +996,23 @@ void Esp32Music::PlayAudioStream() {
             {
                 std::unique_lock<std::mutex> lock(buffer_mutex_);
                 if (audio_buffer_.empty()) {
-                    if (!is_downloading_) {
-                        // 下载完成且缓冲区为空，播放结束
+                    if (!is_downloading_ && !is_paused_.load()) {
+                        // 下载完成且缓冲区为空，且未暂停，播放结束
                         ESP_LOGI(TAG, "Playback finished, total played: %d bytes", total_played);
                         break;
                     }
-                    // 等待新数据
-                    buffer_cv_.wait(lock, [this] { return !audio_buffer_.empty() || !is_downloading_; });
+                    // 等待新数据或恢复播放
+                    buffer_cv_.wait(lock, [this] { 
+                        return !audio_buffer_.empty() || !is_downloading_ || !is_playing_.load(); 
+                    });
+                    if (!is_playing_.load()) {
+                        ESP_LOGI(TAG, "Playback stopped by user, total played: %d bytes", total_played);
+                        break;
+                    }
+                    if (audio_buffer_.empty() && !is_downloading_ && !is_paused_.load()) {
+                        ESP_LOGI(TAG, "Playback finished after wait, total played: %d bytes", total_played);
+                        break;
+                    }
                     if (audio_buffer_.empty()) {
                         continue;
                     }
@@ -864,13 +1095,16 @@ void Esp32Music::PlayAudioStream() {
             // 更新当前播放时间
             current_play_time_ms_ += frame_duration_ms;
             
-            ESP_LOGD(TAG, "Frame %d: time=%lldms, duration=%dms, rate=%d, ch=%d", 
-                    total_frames_decoded_, current_play_time_ms_, frame_duration_ms,
-                    mp3_frame_info_.samprate, mp3_frame_info_.nChans);
+            // 减少频繁的日志输出，只在每100帧输出一次
+            if (total_frames_decoded_ % 100 == 0) {
+                ESP_LOGD(TAG, "Frame %d: time=%lldms, duration=%dms, rate=%d, ch=%d", 
+                        total_frames_decoded_, current_play_time_ms_, frame_duration_ms,
+                        mp3_frame_info_.samprate, mp3_frame_info_.nChans);
+            }
             
             // 更新歌词显示
-            int buffer_latency_ms = 600; // 实测调整值
-            UpdateLyricDisplay(current_play_time_ms_ + buffer_latency_ms);
+                int buffer_latency_ms = 600; // 实测调整值
+                UpdateLyricDisplay(current_play_time_ms_ + buffer_latency_ms);
             
             // 将PCM数据发送到Application的音频解码队列
             if (mp3_frame_info_.outputSamps > 0) {
@@ -896,8 +1130,11 @@ void Esp32Music::PlayAudioStream() {
                     final_pcm_data = mono_buffer.data();
                     final_sample_count = mono_samples;
 
-                    ESP_LOGD(TAG, "Converted stereo to mono: %d -> %d samples", 
-                            stereo_samples, mono_samples);
+                    // 减少频繁日志输出
+                    if (total_frames_decoded_ % 200 == 0) {
+                        ESP_LOGD(TAG, "Converted stereo to mono: %d -> %d samples", 
+                                stereo_samples, mono_samples);
+                    }
                 } else if (mp3_frame_info_.nChans == 1) {
                     // 已经是单声道，无需转换
                     ESP_LOGD(TAG, "Already mono audio: %d samples", final_sample_count);
@@ -930,10 +1167,14 @@ void Esp32Music::PlayAudioStream() {
                     final_sample_count * sizeof(int16_t)
                 );
                 
-                ESP_LOGD(TAG, "Sending %d PCM samples (%d bytes, rate=%d, channels=%d->1) to Application", 
-                        final_sample_count, pcm_size_bytes, mp3_frame_info_.samprate, mp3_frame_info_.nChans);
+                // 减少频繁日志输出，只在每1000帧输出一次
+                if (total_frames_decoded_ % 1000 == 0) {
+                    ESP_LOGD(TAG, "Sending %d PCM samples (%d bytes, rate=%d, channels=%d->1) to Application", 
+                            final_sample_count, pcm_size_bytes, mp3_frame_info_.samprate, mp3_frame_info_.nChans);
+                }
                 
                 // 发送到Application的音频解码队列
+                auto& app = Application::GetInstance();
                 app.AddAudioData(std::move(packet));
                 total_played += pcm_size_bytes;
                 
@@ -946,13 +1187,13 @@ void Esp32Music::PlayAudioStream() {
         } else {
             // 解码失败
             ESP_LOGW(TAG, "MP3 decode failed with error: %d", decode_result);
-            
+                
             // 跳过一些字节继续尝试
-            if (bytes_left > 1) {
-                read_ptr++;
-                bytes_left--;
-            } else {
-                bytes_left = 0;
+                if (bytes_left > 1) {
+                    read_ptr++;
+                    bytes_left--;
+                } else {
+                    bytes_left = 0;
             }
         }
     }
@@ -968,17 +1209,47 @@ void Esp32Music::PlayAudioStream() {
     
     // 停止播放标志
     is_playing_ = false;
+    is_paused_ = false;  // 重置暂停状态
     
-    // 只在频谱显示模式下才停止FFT显示
-    if (display_mode_ == DISPLAY_MODE_SPECTRUM) {
-        auto& board = Board::GetInstance();
-        auto display = board.GetDisplay();
-        if (display) {
-            display->stopFft();
-            ESP_LOGI(TAG, "Stopped FFT display from play thread (spectrum mode)");
-        }
+    // 清理音频缓冲区释放内存
+    ClearAudioBuffer();
+    
+    // 停止歌词线程
+    is_lyric_running_ = false;
+    if (lyric_thread_.joinable()) {
+        lyric_thread_.join();
+        ESP_LOGI(TAG, "Lyric thread stopped and joined");
+    }
+    
+    // 清理歌词数据释放内存
+    lyrics_.clear();
+    current_lyric_index_ = -1;
+    
+    // 重置其他状态变量和清理字符串数据
+    current_play_time_ms_ = 0;
+    total_duration_ms_ = 0;
+    song_name_displayed_ = false;
+    
+    // 清理字符串数据释放内存
+    current_song_name_.clear();
+    current_artist_.clear();
+    current_music_url_.clear();
+    current_lyric_url_.clear();
+    last_downloaded_data_.clear();
+    
+    ESP_LOGI(TAG, "Audio buffer and lyrics cleared for memory cleanup");
+    
+    // 通知显示器播放已完成
+    auto& board = Board::GetInstance();
+    auto display = board.GetDisplay();
+    if (display) {
+        // 使用新的统一API通知播放结束
+        display->SetMusicDetails("", "", false);  // is_playing = false
+        ESP_LOGI(TAG, "Notified display that music playback ended");
+        
+        // 删除频谱相关代码
     } else {
-        ESP_LOGI(TAG, "Not in spectrum mode, skipping FFT stop");
+        ESP_LOGI(TAG, "No display available for cleanup");
     }
 }
 
@@ -1319,9 +1590,9 @@ void Esp32Music::LyricDisplayThread() {
         return;
     }
     
-    // 定期检查是否需要更新显示(频率可以降低)
+    // 定期检查是否需要更新显示(降低频率以减少CPU使用)
     while (is_lyric_running_ && is_playing_) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));  // 增加到500ms，减少CPU负载
     }
     
     ESP_LOGI(TAG, "Lyric display thread finished");
@@ -1367,8 +1638,14 @@ void Esp32Music::UpdateLyricDisplay(int64_t current_time_ms) {
                 lyric_text = lyrics_[current_lyric_index_].second;
             }
             
-            // 显示歌词
-            display->SetChatMessage("lyric", lyric_text.c_str());
+            // 显示歌词到音乐播放器UI
+            auto lcd_display = dynamic_cast<LcdDisplay*>(display);
+            if (lcd_display) {
+                lcd_display->UpdateMusicLyrics(lyric_text.c_str());
+            } else {
+                // 如果不是LCD显示器，使用原来的方式
+                display->SetChatMessage("lyric", lyric_text.c_str());
+            }
             
             ESP_LOGD(TAG, "Lyric update at %lldms: %s", 
                     current_time_ms, 
@@ -1397,10 +1674,47 @@ void Esp32Music::UpdateLyricDisplay(int64_t current_time_ms) {
 
 // 显示模式控制方法实现
 void Esp32Music::SetDisplayMode(DisplayMode mode) {
-    DisplayMode old_mode = display_mode_.load();
     display_mode_ = mode;
     
-    ESP_LOGI(TAG, "Display mode changed from %s to %s", 
-            (old_mode == DISPLAY_MODE_SPECTRUM) ? "SPECTRUM" : "LYRICS",
-            (mode == DISPLAY_MODE_SPECTRUM) ? "SPECTRUM" : "LYRICS");
+    ESP_LOGI(TAG, "Display mode set to LYRICS (spectrum mode removed)");
+}
+
+// 暂停播放
+bool Esp32Music::PauseStreaming() {
+    if (!is_playing_.load() || is_paused_.load()) {
+        ESP_LOGW(TAG, "Cannot pause: not playing or already paused");
+        return false;
+    }
+    
+    is_paused_ = true;
+    ESP_LOGI(TAG, "Music playback paused");
+    return true;
+}
+
+// 继续播放
+bool Esp32Music::ResumeStreaming() {
+    if (!is_playing_.load()) {
+        ESP_LOGW(TAG, "Cannot resume: music is not playing (playback may have finished)");
+        return false;
+    }
+    
+    if (!is_paused_.load()) {
+        ESP_LOGW(TAG, "Cannot resume: music is not paused");
+        return false;
+    }
+    
+    // 确保设备处于空闲状态以便播放音乐
+    auto& app = Application::GetInstance();
+    DeviceState current_state = app.GetDeviceState();
+    
+    if (current_state == kDeviceStateListening || current_state == kDeviceStateSpeaking) {
+        ESP_LOGI(TAG, "Device state is %d, switching to idle for music resume", current_state);
+        app.ToggleChatState(); // 切换到待机状态
+        vTaskDelay(pdMS_TO_TICKS(100)); // 短暂延迟确保状态切换
+    }
+    
+    is_paused_ = false;
+    buffer_cv_.notify_all();  // 唤醒可能等待的播放线程
+    ESP_LOGI(TAG, "Music playback resumed");
+    return true;
 }

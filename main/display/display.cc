@@ -68,6 +68,14 @@ void Display::SetMusicInfo(const char* song_name) {
     }
 }
 
+void Display::SetMusicDetails(const char* song_title, const char* artist, bool is_playing) {
+    // 默认实现，子类可以重写
+    ESP_LOGW(TAG, "SetMusicDetails: %s - %s (playing: %s)", 
+             song_title ? song_title : "Unknown", 
+             artist ? artist : "Unknown Artist", 
+             is_playing ? "yes" : "no");
+}
+
 void Display::SetPowerSaveMode(bool on) {
     ESP_LOGW(TAG, "SetPowerSaveMode: %d", on);
 }

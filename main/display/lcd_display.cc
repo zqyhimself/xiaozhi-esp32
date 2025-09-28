@@ -4,6 +4,8 @@
 #include "lvgl_theme.h"
 #include "assets/lang_config.h"
 
+#include <lvgl.h>
+
 #include <vector>
 #include <algorithm>
 #include <font_awesome.h>
@@ -14,8 +16,12 @@
 #include <cstring>
 
 #include "board.h"
+#include "audio/audio_codec.h"
+#include "music.h"
+#include "boards/common/esp32_music.h"
 
 #define TAG "LcdDisplay"
+
 
 LV_FONT_DECLARE(BUILTIN_TEXT_FONT);
 LV_FONT_DECLARE(BUILTIN_ICON_FONT);
@@ -297,6 +303,7 @@ LcdDisplay::~LcdDisplay() {
         esp_timer_stop(preview_timer_);
         esp_timer_delete(preview_timer_);
     }
+    
 
     if (preview_image_ != nullptr) {
         lv_obj_del(preview_image_);
@@ -374,7 +381,7 @@ void LcdDisplay::SetupUI() {
     status_bar_ = lv_obj_create(container_);
     lv_obj_set_size(status_bar_, LV_HOR_RES, LV_SIZE_CONTENT);
     lv_obj_set_style_radius(status_bar_, 0, 0);
-    lv_obj_set_style_bg_opa(status_bar_, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_opa(status_bar_, LV_OPA_TRANSP, 0);  // 全透明，让播放器背景透过来
     lv_obj_set_style_text_color(status_bar_, lvgl_theme->text_color(), 0);
     
     /* Content - Chat area */
@@ -418,7 +425,7 @@ void LcdDisplay::SetupUI() {
 
     notification_label_ = lv_label_create(status_bar_);
     lv_obj_set_flex_grow(notification_label_, 1);
-    lv_obj_set_style_text_align(notification_label_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_align(notification_label_, LV_TEXT_ALIGN_LEFT, 0);
     lv_obj_set_style_text_color(notification_label_, lvgl_theme->text_color(), 0);
     lv_label_set_text(notification_label_, "");
     lv_obj_add_flag(notification_label_, LV_OBJ_FLAG_HIDDEN);
@@ -426,7 +433,7 @@ void LcdDisplay::SetupUI() {
     status_label_ = lv_label_create(status_bar_);
     lv_obj_set_flex_grow(status_label_, 1);
     lv_label_set_long_mode(status_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
-    lv_obj_set_style_text_align(status_label_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_set_style_text_align(status_label_, LV_TEXT_ALIGN_LEFT, 0);
     lv_obj_set_style_text_color(status_label_, lvgl_theme->text_color(), 0);
     lv_label_set_text(status_label_, Lang::Strings::INITIALIZING);
     
@@ -773,7 +780,7 @@ void LcdDisplay::SetupUI() {
     status_bar_ = lv_obj_create(container_);
     lv_obj_set_size(status_bar_, LV_HOR_RES, LV_SIZE_CONTENT);
     lv_obj_set_style_radius(status_bar_, 0, 0);
-    lv_obj_set_style_bg_opa(status_bar_, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_bg_opa(status_bar_, LV_OPA_TRANSP, 0);  // 全透明，让播放器背景透过来
     lv_obj_set_style_text_color(status_bar_, lvgl_theme->text_color(), 0);
     lv_obj_set_flex_flow(status_bar_, LV_FLEX_FLOW_ROW);
     lv_obj_set_style_pad_top(status_bar_, lvgl_theme->spacing(2), 0);
@@ -794,64 +801,92 @@ void LcdDisplay::SetupUI() {
     lv_obj_set_style_bg_color(content_, lvgl_theme->chat_background_color(), 0);
 
     lv_obj_set_flex_flow(content_, LV_FLEX_FLOW_COLUMN); // 垂直布局（从上到下）
-    lv_obj_set_flex_align(content_, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_SPACE_EVENLY); // 子对象居中对齐，等距分布
+    lv_obj_set_flex_align(content_, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER); // 水平居中，垂直底部对齐
 
-    emoji_box_ = lv_obj_create(content_);
+    /* 预览图片 - 居中显示 */
+    preview_image_ = lv_image_create(content_);
+    lv_obj_set_size(preview_image_, width_ / 2, height_ / 2);
+    lv_obj_add_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
+
+    /* 表情显示区域 - 直接放在屏幕上，居中对齐 */
+    emoji_box_ = lv_obj_create(screen);
     lv_obj_set_size(emoji_box_, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_style_bg_opa(emoji_box_, LV_OPA_TRANSP, 0);
     lv_obj_set_style_pad_all(emoji_box_, 0, 0);
     lv_obj_set_style_border_width(emoji_box_, 0, 0);
+    // 表情居中对齐
+    lv_obj_align(emoji_box_, LV_ALIGN_CENTER, 0, 0);
 
     emoji_label_ = lv_label_create(emoji_box_);
     lv_obj_set_style_text_font(emoji_label_, large_icon_font, 0);
     lv_obj_set_style_text_color(emoji_label_, lvgl_theme->text_color(), 0);
     lv_label_set_text(emoji_label_, FONT_AWESOME_MICROCHIP_AI);
+    lv_obj_center(emoji_label_);
 
     emoji_image_ = lv_img_create(emoji_box_);
     lv_obj_center(emoji_image_);
     lv_obj_add_flag(emoji_image_, LV_OBJ_FLAG_HIDDEN);
 
-    preview_image_ = lv_image_create(content_);
-    lv_obj_set_size(preview_image_, width_ / 2, height_ / 2);
-    lv_obj_align(preview_image_, LV_ALIGN_CENTER, 0, 0);
-    lv_obj_add_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
-
-    chat_message_label_ = lv_label_create(content_);
+    /* 聊天文本标签 - 基于屏幕底部定位，深灰色背景 */
+    chat_message_label_ = lv_label_create(screen);
     lv_label_set_text(chat_message_label_, "");
-    lv_obj_set_width(chat_message_label_, width_ * 0.9); // 限制宽度为屏幕宽度的 90%
-    lv_label_set_long_mode(chat_message_label_, LV_LABEL_LONG_WRAP); // 设置为自动换行模式
-    lv_obj_set_style_text_align(chat_message_label_, LV_TEXT_ALIGN_CENTER, 0); // 设置文本居中对齐
+    lv_obj_set_width(chat_message_label_, width_ * 0.9);  // 宽度90%
+    lv_obj_set_height(chat_message_label_, LV_SIZE_CONTENT);  // 高度根据内容自适应
+    // 基于屏幕底部定位，距离底部20像素（表情高度+间距）
+    lv_obj_align(chat_message_label_, LV_ALIGN_BOTTOM_MID, 0, -20);
+    lv_obj_set_style_radius(chat_message_label_, 8, 0);  // 圆角
+    lv_obj_set_style_border_width(chat_message_label_, 0, 0);  // 无边框
+    lv_obj_set_style_pad_all(chat_message_label_, 8, 0);  // 内边距
+    lv_obj_set_style_bg_color(chat_message_label_, lv_color_hex(0x404040), 0);  // 深灰色背景
+    lv_obj_set_style_bg_opa(chat_message_label_, LV_OPA_70, 0);  // 半透明背景
+    lv_label_set_long_mode(chat_message_label_, LV_LABEL_LONG_WRAP); // 换行显示
+    lv_obj_set_style_text_align(chat_message_label_, LV_TEXT_ALIGN_CENTER, 0); // 居中对齐
     lv_obj_set_style_text_color(chat_message_label_, lvgl_theme->text_color(), 0);
+    lv_obj_add_flag(chat_message_label_, LV_OBJ_FLAG_HIDDEN);  // 初始时隐藏
 
-    /* Status bar */
-    network_label_ = lv_label_create(status_bar_);
-    lv_label_set_text(network_label_, "");
-    lv_obj_set_style_text_font(network_label_, icon_font, 0);
-    lv_obj_set_style_text_color(network_label_, lvgl_theme->text_color(), 0);
-
+    /* Status bar - 左侧状态/时间，右侧电池和信号 */
+    
+    /* 状态标签 - 左侧显示 */
+    status_label_ = lv_label_create(status_bar_);
+    lv_obj_set_style_text_align(status_label_, LV_TEXT_ALIGN_LEFT, 0);
+    lv_obj_set_style_text_color(status_label_, lvgl_theme->text_color(), 0);
+    lv_obj_set_style_text_font(status_label_, text_font, 0);
+    lv_label_set_text(status_label_, Lang::Strings::INITIALIZING);
+    lv_label_set_long_mode(status_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    
+    /* 通知标签 - 隐藏，与状态标签重叠 */
     notification_label_ = lv_label_create(status_bar_);
-    lv_obj_set_flex_grow(notification_label_, 1);
-    lv_obj_set_style_text_align(notification_label_, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_move_to_index(notification_label_, 0);  // 移动到第一个位置，与status_label_重叠
+    lv_obj_set_style_text_align(notification_label_, LV_TEXT_ALIGN_LEFT, 0);
     lv_obj_set_style_text_color(notification_label_, lvgl_theme->text_color(), 0);
+    lv_obj_set_style_text_font(notification_label_, text_font, 0);
     lv_label_set_text(notification_label_, "");
     lv_obj_add_flag(notification_label_, LV_OBJ_FLAG_HIDDEN);
 
-    status_label_ = lv_label_create(status_bar_);
-    lv_obj_set_flex_grow(status_label_, 1);
-    lv_label_set_long_mode(status_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
-    lv_obj_set_style_text_align(status_label_, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_style_text_color(status_label_, lvgl_theme->text_color(), 0);
-    lv_label_set_text(status_label_, Lang::Strings::INITIALIZING);
+    /* 中间占位符 - 占用剩余空间 */
+    lv_obj_t* center_spacer = lv_label_create(status_bar_);
+    lv_obj_set_flex_grow(center_spacer, 1);
+    lv_label_set_text(center_spacer, "");
 
+    /* 静音标签 - 右侧第三个 */
     mute_label_ = lv_label_create(status_bar_);
     lv_label_set_text(mute_label_, "");
     lv_obj_set_style_text_font(mute_label_, icon_font, 0);
     lv_obj_set_style_text_color(mute_label_, lvgl_theme->text_color(), 0);
 
+    /* 网络信号标签 - 右侧第二个（电池左侧） */
+    network_label_ = lv_label_create(status_bar_);
+    lv_label_set_text(network_label_, "");
+    lv_obj_set_style_text_font(network_label_, icon_font, 0);
+    lv_obj_set_style_text_color(network_label_, lvgl_theme->text_color(), 0);
+    lv_obj_set_style_margin_left(network_label_, 8, 0);  // 与前面元素的间距
+
+    /* 电池标签 - 右侧第一个（最右侧） */
     battery_label_ = lv_label_create(status_bar_);
     lv_label_set_text(battery_label_, "");
     lv_obj_set_style_text_font(battery_label_, icon_font, 0);
     lv_obj_set_style_text_color(battery_label_, lvgl_theme->text_color(), 0);
+    lv_obj_set_style_margin_left(battery_label_, 8, 0);  // 与网络图标的间距
 
     low_battery_popup_ = lv_obj_create(screen);
     lv_obj_set_scrollbar_mode(low_battery_popup_, LV_SCROLLBAR_MODE_OFF);
@@ -909,7 +944,16 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
     if (chat_message_label_ == nullptr) {
         return;
     }
+    
+    // 设置文本内容
     lv_label_set_text(chat_message_label_, content);
+    
+    // 根据内容是否为空来显示或隐藏聊天标签
+    if (content != nullptr && strlen(content) > 0) {
+        lv_obj_remove_flag(chat_message_label_, LV_OBJ_FLAG_HIDDEN);  // 显示标签
+    } else {
+        lv_obj_add_flag(chat_message_label_, LV_OBJ_FLAG_HIDDEN);     // 隐藏标签
+    }
 }
 #endif
 
@@ -1017,8 +1061,8 @@ void LcdDisplay::SetTheme(Theme* theme) {
         lv_obj_set_style_bg_color(container_, lvgl_theme->background_color(), 0);
     }
     
-    // Keep status bar background transparent
-    lv_obj_set_style_bg_opa(status_bar_, LV_OPA_TRANSP, 0);
+    // Keep status bar background with theme color and glass effect
+    lv_obj_set_style_bg_opa(status_bar_, LV_OPA_TRANSP, 0);  // 全透明，让播放器背景透过来
     
     // Update status bar elements
     lv_obj_set_style_text_color(network_label_, lvgl_theme->text_color(), 0);
@@ -1111,13 +1155,33 @@ void LcdDisplay::SetTheme(Theme* theme) {
     // Update low battery popup
     lv_obj_set_style_bg_color(low_battery_popup_, lvgl_theme->low_battery_color(), 0);
 
+    // 更新音乐播放器UI的主题
+    if (music_player_ui_) {
+        music_player_ui_->UpdateTheme(lvgl_theme);
+    }
+    
     // No errors occurred. Save theme to settings
     Display::SetTheme(lvgl_theme);
 }
 
 void LcdDisplay::SetMusicInfo(const char* song_name) {
     #if CONFIG_USE_WECHAT_MESSAGE_STYLE
-        // 微信模式下不显示歌名，保持原有聊天功能
+        // 微信模式下使用原来的显示方式：在聊天消息区域显示歌曲信息
+        DisplayLockGuard lock(this);
+        if (chat_message_label_ == nullptr) {
+            return;
+        }
+        if (song_name != nullptr && strlen(song_name) > 0) {
+            // 在聊天消息标签中显示歌名
+            lv_label_set_text(chat_message_label_, song_name);
+            lv_label_set_long_mode(chat_message_label_, LV_LABEL_LONG_WRAP);  // 保持换行显示
+            SetEmotion(FONT_AWESOME_MUSIC);  // 设置音乐表情
+            ESP_LOGI(TAG, "WeChat mode: Set music info in chat message: %s", song_name);
+        } else {
+            lv_label_set_text(chat_message_label_, "");
+            SetEmotion("neutral");  // 使用正确的默认表情名称
+            ESP_LOGI(TAG, "WeChat mode: Cleared music info");
+        }
         return;
     #else
         // 非微信模式：在表情下方显示歌名
@@ -1127,20 +1191,483 @@ void LcdDisplay::SetMusicInfo(const char* song_name) {
         }
         
         if (song_name != nullptr && strlen(song_name) > 0) {
-            std::string music_text = "";
-            music_text += song_name;
-            lv_label_set_text(chat_message_label_, music_text.c_str());
+            // 显示音乐播放器界面
+            ESP_LOGI(TAG, "Setting music info: %s - showing music player", song_name);
             
-            // 确保显示 emotion_label_ 和 chat_message_label_，隐藏 preview_image_
+            // 如果音乐播放器UI不存在，创建它
+            if (!music_player_ui_) {
+                auto lvgl_theme = static_cast<LvglTheme*>(current_theme_);
+                music_player_ui_ = std::make_unique<MusicPlayerUI>(lv_screen_active(), width_, height_, lvgl_theme);
+            }
+            
+            // 停止所有表情动画，释放资源
+            if (gif_controller_) {
+                gif_controller_->Stop();
+                gif_controller_.reset();
+                ESP_LOGI(TAG, "Stopped GIF animation for music playback");
+            }
+            
+            // 隐藏表情界面，节省CPU资源
+            if (emoji_box_) {
+                lv_obj_add_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
+                ESP_LOGI(TAG, "Hidden emoji interface during music playback");
+            }
+            
+            // 显示音乐播放器并设置歌名
+            music_player_ui_->Show();
+            
+            // 直接设置歌名（现在传入的已经是干净的歌名）
+            music_player_ui_->SetSongTitle(song_name);
+            music_player_ui_->SetPlayState(MusicPlayerUI::PLAYING);
+            
+            ESP_LOGI(TAG, "Set song title: '%s'", song_name);
+            
+            // 设置当前音量
+            auto& board = Board::GetInstance();
+            auto audio_codec = board.GetAudioCodec();
+            if (audio_codec) {
+                int current_volume = audio_codec->output_volume();
+                music_player_ui_->SetVolume(current_volume);
+                ESP_LOGI("LcdDisplay", "Set music player volume to current audio codec volume: %d", current_volume);
+            }
+            
+            // 设置默认的播放时间和进度
+            music_player_ui_->SetCurrentTime("00:00");
+            music_player_ui_->SetDuration("--:--");
+            music_player_ui_->SetProgress(0.0f);
+            music_player_ui_->SetLyrics("正在加载歌词...");
+            
+            // 设置音乐控制回调函数
+            music_player_ui_->SetPlayPauseCallback([](void* user_data) {
+                ESP_LOGI("LcdDisplay", "Play/Pause button clicked");
+                // 获取当前的Board实例来访问音乐播放器
+                auto& board = Board::GetInstance();
+                auto music = board.GetMusic();
+                if (music) {
+                    // 将Music*转换为Esp32Music*以访问新方法
+                    auto esp32_music = dynamic_cast<Esp32Music*>(music);
+                    if (esp32_music) {
+                        if (esp32_music->IsPlaying() && !esp32_music->IsPaused()) {
+                            // 正在播放且未暂停，执行暂停
+                            bool success = esp32_music->PauseStreaming();
+                            ESP_LOGI("LcdDisplay", "Music pause result: %s", success ? "success" : "failed");
+                            // 更新UI显示为暂停状态
+                            auto display = board.GetDisplay();
+                            if (display) {
+                                auto lcd_display = static_cast<LcdDisplay*>(display);
+                                if (lcd_display->music_player_ui_) {
+                                    lcd_display->music_player_ui_->SetPlayState(MusicPlayerUI::PAUSED);
+                                }
+                            }
+                        } else if (esp32_music->IsPlaying() && esp32_music->IsPaused()) {
+                            // 正在播放但已暂停，执行继续播放
+                            bool success = esp32_music->ResumeStreaming();
+                            ESP_LOGI("LcdDisplay", "Music resume result: %s", success ? "success" : "failed");
+                            // 更新UI显示为播放状态
+                            auto display = board.GetDisplay();
+                            if (display) {
+                                auto lcd_display = static_cast<LcdDisplay*>(display);
+                                if (lcd_display->music_player_ui_) {
+                                    lcd_display->music_player_ui_->SetPlayState(MusicPlayerUI::PLAYING);
+                                }
+                            }
+                        } else {
+                            ESP_LOGW("LcdDisplay", "Music is not playing, cannot pause/resume (playback may have finished)");
+                            // 如果播放已结束，更新UI状态
+                            auto display = board.GetDisplay();
+                            if (display) {
+                                auto lcd_display = static_cast<LcdDisplay*>(display);
+                                if (lcd_display->music_player_ui_) {
+                                    lcd_display->music_player_ui_->SetPlayState(MusicPlayerUI::STOPPED);
+                                }
+                            }
+                        }
+                    } else {
+                        ESP_LOGW("LcdDisplay", "Music player is not Esp32Music instance");
+                    }
+                } else {
+                    ESP_LOGW("LcdDisplay", "No music player available");
+                }
+            }, nullptr);
+            
+            music_player_ui_->SetPreviousCallback([](void* user_data) {
+                ESP_LOGI("LcdDisplay", "Previous button clicked - not implemented yet");
+            }, nullptr);
+            
+            music_player_ui_->SetNextCallback([](void* user_data) {
+                ESP_LOGI("LcdDisplay", "Next button clicked - not implemented yet");
+            }, nullptr);
+            
+            music_player_ui_->SetProgressCallback([](float progress, void* user_data) {
+                ESP_LOGI("LcdDisplay", "Progress changed: %.2f%% - not implemented yet", progress * 100);
+            }, nullptr);
+            
+            music_player_ui_->SetVolumeCallback([](int volume, void* user_data) {
+                ESP_LOGI("LcdDisplay", "Volume changed: %d%%", volume);
+                // 获取当前的Board实例来访问音频编解码器
+                auto& board = Board::GetInstance();
+                auto audio_codec = board.GetAudioCodec();
+                if (audio_codec) {
+                    audio_codec->SetOutputVolume(volume);
+                    ESP_LOGI("LcdDisplay", "Set audio codec volume to %d", volume);
+                } else {
+                    ESP_LOGW("LcdDisplay", "No audio codec available for volume control");
+                }
+            }, nullptr);
+            
+            // 禁用触摸音量控制（因为现在使用滑块）
+            EnableTouchVolumeControl(false);
+            
+            // 启动音乐进度更新
+            StartMusicProgressUpdate();
+            
+            // 隐藏传统的聊天界面元素
             if (emotion_label_ != nullptr) {
-                lv_obj_clear_flag(emotion_label_, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(emotion_label_, LV_OBJ_FLAG_HIDDEN);
+            }
+            if (chat_message_label_ != nullptr) {
+                lv_obj_add_flag(chat_message_label_, LV_OBJ_FLAG_HIDDEN);
             }
             if (preview_image_ != nullptr) {
                 lv_obj_add_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
             }
+            if (emoji_box_ != nullptr) {
+                lv_obj_add_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
+            }
         } else {
-            // 清空歌名显示
-            lv_label_set_text(chat_message_label_, "");
+            // 清空歌名显示，隐藏音乐播放器
+            if (music_player_ui_) {
+                music_player_ui_->Hide();
+                EnableTouchVolumeControl(true);  // 恢复触摸音量控制
+                StopMusicProgressUpdate();  // 停止音乐进度更新
+            }
+            
+            // 恢复传统的聊天界面元素
+            if (emotion_label_ != nullptr) {
+                lv_obj_remove_flag(emotion_label_, LV_OBJ_FLAG_HIDDEN);
+            }
+            if (chat_message_label_ != nullptr) {
+                // 音乐播放完成后，聊天文本标签应该保持隐藏状态，只显示表情
+                lv_obj_add_flag(chat_message_label_, LV_OBJ_FLAG_HIDDEN);
+                lv_label_set_text(chat_message_label_, "");  // 清空文本
+            }
+            if (emoji_box_ != nullptr) {
+                lv_obj_remove_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
+                // 注意：表情恢复现在统一在SetMusicDetails中处理，这里不再重复设置
+                ESP_LOGI(TAG, "Restored emoji interface after music playback ended (legacy SetMusicInfo)");
+            }
+            
+            // 停止音乐进度更新
+            StopMusicProgressUpdate();
         }
     #endif
     }
+
+void LcdDisplay::SetMusicDetails(const char* song_title, const char* artist, bool is_playing) {
+    DisplayLockGuard lock(this);
+    
+    if (is_playing && song_title && strlen(song_title) > 0) {
+        ESP_LOGI(TAG, "Setting music details: '%s' by '%s' - showing music player", 
+                 song_title, artist ? artist : "Unknown Artist");
+        
+        // 暂停表情动画，但不销毁控制器
+        if (gif_controller_) {
+            gif_controller_->Stop();
+            ESP_LOGI(TAG, "Paused GIF animation for music playback");
+        }
+        
+        // 隐藏表情界面，节省CPU资源
+        if (emoji_box_) {
+            lv_obj_add_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
+            ESP_LOGI(TAG, "Hidden emoji interface during music playback");
+        }
+        
+        // 如果音乐播放器UI不存在，创建它
+        if (!music_player_ui_) {
+            auto lvgl_theme = static_cast<LvglTheme*>(current_theme_);
+            music_player_ui_ = std::make_unique<MusicPlayerUI>(lv_screen_active(), width_, height_, lvgl_theme);
+        }
+        
+        // 显示音乐播放器并直接设置歌名和歌手
+        music_player_ui_->Show();
+        music_player_ui_->SetSongTitle(song_title);
+        if (artist && strlen(artist) > 0) {
+            music_player_ui_->SetArtist(artist);
+        }
+        music_player_ui_->SetPlayState(MusicPlayerUI::PLAYING);
+        
+        // 设置当前音量
+        auto& board = Board::GetInstance();
+        auto audio_codec = board.GetAudioCodec();
+        if (audio_codec) {
+            int current_volume = audio_codec->output_volume();
+            music_player_ui_->SetVolume(current_volume);
+        }
+        
+        // 设置默认状态
+        music_player_ui_->SetCurrentTime("00:00");
+        music_player_ui_->SetDuration("--:--");
+        music_player_ui_->SetProgress(0.0f);
+        music_player_ui_->SetLyrics("正在加载歌词...");
+        
+        // 设置音乐控制回调
+        music_player_ui_->SetVolumeCallback([](int volume, void* user_data) {
+            ESP_LOGI("LcdDisplay", "Volume changed: %d%%", volume);
+            auto& board = Board::GetInstance();
+            auto audio_codec = board.GetAudioCodec();
+            if (audio_codec) {
+                audio_codec->SetOutputVolume(volume);
+                ESP_LOGI("LcdDisplay", "Set audio codec volume to %d", volume);
+            } else {
+                ESP_LOGW("LcdDisplay", "No audio codec available for volume control");
+            }
+        }, nullptr);
+        
+        // 设置播放/暂停回调
+        music_player_ui_->SetPlayPauseCallback([](void* user_data) {
+            ESP_LOGI("LcdDisplay", "Play/Pause button clicked");
+            auto& board = Board::GetInstance();
+            auto music = board.GetMusic();
+            if (music) {
+                auto esp32_music = dynamic_cast<Esp32Music*>(music);
+                if (esp32_music) {
+                    if (esp32_music->IsPlaying() && !esp32_music->IsPaused()) {
+                        // 正在播放且未暂停，执行暂停
+                        bool success = esp32_music->PauseStreaming();
+                        ESP_LOGI("LcdDisplay", "Music pause result: %s", success ? "success" : "failed");
+                        auto display = board.GetDisplay();
+                        if (display) {
+                            auto lcd_display = static_cast<LcdDisplay*>(display);
+                            if (lcd_display->music_player_ui_) {
+                                lcd_display->music_player_ui_->SetPlayState(MusicPlayerUI::PAUSED);
+                            }
+                        }
+                    } else if (esp32_music->IsPlaying() && esp32_music->IsPaused()) {
+                        // 正在播放但已暂停，执行继续播放
+                        bool success = esp32_music->ResumeStreaming();
+                        ESP_LOGI("LcdDisplay", "Music resume result: %s", success ? "success" : "failed");
+                        auto display = board.GetDisplay();
+                        if (display) {
+                            auto lcd_display = static_cast<LcdDisplay*>(display);
+                            if (lcd_display->music_player_ui_) {
+                                lcd_display->music_player_ui_->SetPlayState(MusicPlayerUI::PLAYING);
+                            }
+                        }
+                    } else {
+                        ESP_LOGW("LcdDisplay", "Music is not playing, cannot pause/resume");
+                    }
+                }
+            }
+        }, nullptr);
+        
+        // 禁用触摸音量控制并启动进度更新
+        EnableTouchVolumeControl(false);
+        StartMusicProgressUpdate();
+        
+        // 隐藏传统聊天界面元素
+        if (emotion_label_ != nullptr) {
+            lv_obj_add_flag(emotion_label_, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (chat_message_label_ != nullptr) {
+            lv_obj_add_flag(chat_message_label_, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (preview_image_ != nullptr) {
+            lv_obj_add_flag(preview_image_, LV_OBJ_FLAG_HIDDEN);
+        }
+        
+    } else {
+        // 播放结束或暂停
+        ESP_LOGI(TAG, "Music playback ended - hiding music player");
+        
+        if (music_player_ui_) {
+            music_player_ui_->Hide();
+            EnableTouchVolumeControl(true);
+            StopMusicProgressUpdate();
+        }
+        
+        // 恢复传统的聊天界面元素
+        if (emotion_label_ != nullptr) {
+            lv_obj_remove_flag(emotion_label_, LV_OBJ_FLAG_HIDDEN);
+        }
+        if (chat_message_label_ != nullptr) {
+            lv_obj_add_flag(chat_message_label_, LV_OBJ_FLAG_HIDDEN);
+            lv_label_set_text(chat_message_label_, "");
+        }
+        if (emoji_box_ != nullptr) {
+            lv_obj_remove_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
+            ESP_LOGI(TAG, "Restored emoji interface after music playback ended");
+            
+            // 重新设置默认表情来恢复表情显示（会自动处理GIF/静态图片）
+            SetEmotion("neutral");
+            ESP_LOGI(TAG, "Restored neutral emotion after music playback");
+        }
+    }
+}
+
+// 音乐播放器功能实现
+void LcdDisplay::ShowMusicPlayer() {
+    DisplayLockGuard lock(this);
+    
+    if (!music_player_ui_) {
+        auto lvgl_theme = static_cast<LvglTheme*>(current_theme_);
+        music_player_ui_ = std::make_unique<MusicPlayerUI>(lv_screen_active(), width_, height_, lvgl_theme);
+    }
+    music_player_ui_->Show();
+    EnableTouchVolumeControl(false);  // 禁用触摸音量控制
+}
+
+void LcdDisplay::HideMusicPlayer() {
+    DisplayLockGuard lock(this);
+    
+    if (music_player_ui_) {
+        music_player_ui_->Hide();
+    }
+    EnableTouchVolumeControl(true);  // 恢复触摸音量控制
+}
+
+void LcdDisplay::UpdateMusicProgress(float progress) {
+    if (music_player_ui_) {
+        music_player_ui_->SetProgress(progress);
+    }
+}
+
+void LcdDisplay::UpdateMusicLyrics(const char* lyrics) {
+    if (music_player_ui_) {
+        music_player_ui_->SetLyrics(lyrics);
+    }
+}
+
+void LcdDisplay::UpdateMusicTime(const char* current_time, const char* duration) {
+    if (music_player_ui_) {
+        music_player_ui_->SetCurrentTime(current_time);
+        music_player_ui_->SetDuration(duration);
+    }
+}
+
+void LcdDisplay::SetMusicPlayState(bool is_playing) {
+    if (music_player_ui_) {
+        MusicPlayerUI::PlayState state = is_playing ? MusicPlayerUI::PLAYING : MusicPlayerUI::PAUSED;
+        music_player_ui_->SetPlayState(state);
+    }
+}
+
+void LcdDisplay::SetMusicControlCallbacks(
+    void (*play_pause_cb)(void*),
+    void (*previous_cb)(void*),
+    void (*next_cb)(void*),
+    void (*progress_cb)(float, void*),
+    void (*volume_cb)(int, void*),
+    void* user_data
+) {
+    if (music_player_ui_) {
+        music_player_ui_->SetPlayPauseCallback(play_pause_cb, user_data);
+        music_player_ui_->SetPreviousCallback(previous_cb, user_data);
+        music_player_ui_->SetNextCallback(next_cb, user_data);
+        music_player_ui_->SetProgressCallback(progress_cb, user_data);
+        music_player_ui_->SetVolumeCallback(volume_cb, user_data);
+    }
+}
+
+void LcdDisplay::SetVolume(int volume) {
+    if (music_player_ui_) {
+        music_player_ui_->SetVolume(volume);
+    }
+}
+
+int LcdDisplay::GetVolume() const {
+    if (music_player_ui_) {
+        return music_player_ui_->GetVolume();
+    }
+    return 50;  // 默认音量
+}
+
+void LcdDisplay::EnableTouchVolumeControl(bool enable) {
+    // 这里应该调用底层的触摸音量控制启用/禁用函数
+    // 具体实现取决于您现有的触摸音量控制系统
+    ESP_LOGI(TAG, "Touch volume control %s", enable ? "enabled" : "disabled");
+    
+    // TODO: 调用您现有的触摸音量控制开关函数
+    // 例如：Board::GetInstance().SetTouchVolumeEnabled(enable);
+}
+
+bool LcdDisplay::IsTouchVolumeControlEnabled() const {
+    // 返回触摸音量控制的当前状态
+    // TODO: 从您现有的系统获取状态
+    return !music_player_ui_ || !music_player_ui_->IsVisible();
+}
+
+void LcdDisplay::StartMusicProgressUpdate() {
+    if (music_progress_timer_ != nullptr) {
+        return;  // 定时器已经启动
+    }
+    
+    const esp_timer_create_args_t timer_args = {
+        .callback = [](void* arg) {
+            LcdDisplay* display = static_cast<LcdDisplay*>(arg);
+            
+            // 获取音乐播放器实例
+            auto& board = Board::GetInstance();
+            auto music = board.GetMusic();
+            if (music) {
+                auto esp32_music = dynamic_cast<Esp32Music*>(music);
+                if (esp32_music && esp32_music->IsPlaying() && display->music_player_ui_) {
+                    // 获取播放时间（毫秒）
+                    int64_t current_time_ms = esp32_music->GetCurrentPlayTimeMs();
+                    
+                    // 转换为分钟:秒格式
+                    int total_seconds = current_time_ms / 1000;
+                    int minutes = total_seconds / 60;
+                    int seconds = total_seconds % 60;
+                    
+                    char time_str[16];
+                    snprintf(time_str, sizeof(time_str), "%02d:%02d", minutes, seconds);
+                    
+                    // 更新UI（需要在LVGL任务中执行）
+                    DisplayLockGuard lock(display);
+                    display->music_player_ui_->SetCurrentTime(time_str);
+                    
+                    // 获取歌曲总时长（如果可用）
+                    int64_t total_duration_ms = esp32_music->GetTotalDurationMs();
+                    float progress = 0.0f;
+                    
+                    if (total_duration_ms > 0) {
+                        // 使用实际总时长计算进度
+                        progress = (float)current_time_ms / (float)total_duration_ms;
+                        if (progress > 1.0f) progress = 1.0f;
+                        
+                        // 更新总时长显示
+                        int total_seconds = total_duration_ms / 1000;
+                        int total_minutes = total_seconds / 60;
+                        int remaining_seconds = total_seconds % 60;
+                        
+                        char duration_str[16];
+                        snprintf(duration_str, sizeof(duration_str), "%02d:%02d", total_minutes, remaining_seconds);
+                        display->music_player_ui_->SetDuration(duration_str);
+                    } else {
+                        // 如果没有总时长信息，使用估算（4分钟）
+                        progress = (current_time_ms / 1000.0f) / 240.0f;  // 240秒 = 4分钟
+                        if (progress > 1.0f) progress = 1.0f;
+                        display->music_player_ui_->SetDuration("--:--");
+                    }
+                    
+                    display->music_player_ui_->SetProgress(progress);
+                }
+            }
+        },
+        .arg = this,
+        .name = "music_progress_timer"
+    };
+    
+    esp_timer_create(&timer_args, &music_progress_timer_);
+    esp_timer_start_periodic(music_progress_timer_, 1000000);  // 每1秒更新一次
+    ESP_LOGI(TAG, "Music progress update timer started");
+}
+
+void LcdDisplay::StopMusicProgressUpdate() {
+    if (music_progress_timer_ != nullptr) {
+        esp_timer_stop(music_progress_timer_);
+        esp_timer_delete(music_progress_timer_);
+        music_progress_timer_ = nullptr;
+        ESP_LOGI(TAG, "Music progress update timer stopped");
+    }
+}
