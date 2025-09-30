@@ -45,6 +45,13 @@ protected:
     void SetupUI();
     virtual bool Lock(int timeout_ms = 0) override;
     virtual void Unlock() override;
+    
+    // 检查是否选择了音乐播放器界面风格
+    bool IsMusicPlayerStyleEnabled() const;
+    
+    // 传统方式显示音乐信息的辅助方法
+    void SetMusicInfoTraditional(const char* text, const char* mode_name);
+    void SetMusicDetailsTraditional(const char* title, const char* artist, bool is_playing, const char* mode_name);
 
 protected:
     // 添加protected构造函数
@@ -92,6 +99,10 @@ public:
     // 音乐进度更新
     void StartMusicProgressUpdate();
     void StopMusicProgressUpdate();
+    
+    // 音乐播放器状态检查
+    bool IsMusicPlayerVisible() const;
+    void SetMusicPlayerPlayState(MusicPlayerUI::PlayState state);
 };
 
 // SPI LCD显示器

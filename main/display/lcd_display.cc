@@ -831,15 +831,25 @@ void LcdDisplay::SetupUI() {
     chat_message_label_ = lv_label_create(screen);
     lv_label_set_text(chat_message_label_, "");
     lv_obj_set_width(chat_message_label_, width_ * 0.9);  // 宽度90%
-    lv_obj_set_height(chat_message_label_, LV_SIZE_CONTENT);  // 高度根据内容自适应
-    // 基于屏幕底部定位，距离底部20像素（表情高度+间距）
-    lv_obj_align(chat_message_label_, LV_ALIGN_BOTTOM_MID, 0, -20);
+    // 自适应内容高度，但最大不超过屏幕高度的三分之一
+    lv_obj_set_height(chat_message_label_, LV_SIZE_CONTENT);
+    lv_obj_set_style_max_height(chat_message_label_, height_ / 3, 0);
+    // 基于屏幕底部定位，根据屏幕尺寸调整间距
+    int bottom_margin = (height_ <= 128) ? -5 : -20;  // 小屏幕用更小的间距
+    lv_obj_align(chat_message_label_, LV_ALIGN_BOTTOM_MID, 0, bottom_margin);
     lv_obj_set_style_radius(chat_message_label_, 8, 0);  // 圆角
     lv_obj_set_style_border_width(chat_message_label_, 0, 0);  // 无边框
     lv_obj_set_style_pad_all(chat_message_label_, 8, 0);  // 内边距
-    lv_obj_set_style_bg_color(chat_message_label_, lv_color_hex(0x404040), 0);  // 深灰色背景
+    lv_obj_set_style_bg_color(chat_message_label_, lvgl_theme->assistant_bubble_color(), 0);  // 跟随主题背景
     lv_obj_set_style_bg_opa(chat_message_label_, LV_OPA_70, 0);  // 半透明背景
-    lv_label_set_long_mode(chat_message_label_, LV_LABEL_LONG_WRAP); // 换行显示
+    // 根据屏幕尺寸选择合适的文本显示模式
+    if (width_ <= 128 && height_ <= 128) {
+        // 小屏幕：使用滚动模式，避免文本过长
+        lv_label_set_long_mode(chat_message_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
+    } else {
+        // 正常屏幕：使用换行显示
+        lv_label_set_long_mode(chat_message_label_, LV_LABEL_LONG_WRAP);
+    }
     lv_obj_set_style_text_align(chat_message_label_, LV_TEXT_ALIGN_CENTER, 0); // 居中对齐
     lv_obj_set_style_text_color(chat_message_label_, lvgl_theme->text_color(), 0);
     lv_obj_add_flag(chat_message_label_, LV_OBJ_FLAG_HIDDEN);  // 初始时隐藏
@@ -1155,6 +1165,12 @@ void LcdDisplay::SetTheme(Theme* theme) {
     // Update low battery popup
     lv_obj_set_style_bg_color(low_battery_popup_, lvgl_theme->low_battery_color(), 0);
 
+    // 更新聊天消息标签的主题
+    if (chat_message_label_) {
+        lv_obj_set_style_text_color(chat_message_label_, lvgl_theme->text_color(), 0);
+        lv_obj_set_style_bg_color(chat_message_label_, lvgl_theme->assistant_bubble_color(), 0);
+    }
+    
     // 更新音乐播放器UI的主题
     if (music_player_ui_) {
         music_player_ui_->UpdateTheme(lvgl_theme);
@@ -1165,28 +1181,20 @@ void LcdDisplay::SetTheme(Theme* theme) {
 }
 
 void LcdDisplay::SetMusicInfo(const char* song_name) {
+    DisplayLockGuard lock(this);
+    
     #if CONFIG_USE_WECHAT_MESSAGE_STYLE
-        // 微信模式下使用原来的显示方式：在聊天消息区域显示歌曲信息
-        DisplayLockGuard lock(this);
-        if (chat_message_label_ == nullptr) {
-            return;
-        }
-        if (song_name != nullptr && strlen(song_name) > 0) {
-            // 在聊天消息标签中显示歌名
-            lv_label_set_text(chat_message_label_, song_name);
-            lv_label_set_long_mode(chat_message_label_, LV_LABEL_LONG_WRAP);  // 保持换行显示
-            SetEmotion(FONT_AWESOME_MUSIC);  // 设置音乐表情
-            ESP_LOGI(TAG, "WeChat mode: Set music info in chat message: %s", song_name);
-        } else {
-            lv_label_set_text(chat_message_label_, "");
-            SetEmotion("neutral");  // 使用正确的默认表情名称
-            ESP_LOGI(TAG, "WeChat mode: Cleared music info");
-        }
+        SetMusicInfoTraditional(song_name, "WeChat mode");
         return;
     #else
-        // 非微信模式：在表情下方显示歌名
-        DisplayLockGuard lock(this);
-        if (chat_message_label_ == nullptr) {
+        #if CONFIG_USE_EMOTE_MESSAGE_STYLE
+            SetMusicInfoTraditional(song_name, "Emote mode");
+            return;
+        #endif
+        
+        // 默认模式：检查是否启用了音乐播放器界面
+        if (!IsMusicPlayerStyleEnabled()) {
+            SetMusicInfoTraditional(song_name, "Traditional mode");
             return;
         }
         
@@ -1366,6 +1374,22 @@ void LcdDisplay::SetMusicInfo(const char* song_name) {
 void LcdDisplay::SetMusicDetails(const char* song_title, const char* artist, bool is_playing) {
     DisplayLockGuard lock(this);
     
+    #if CONFIG_USE_WECHAT_MESSAGE_STYLE
+        SetMusicDetailsTraditional(song_title, artist, is_playing, "WeChat mode");
+        return;
+    #endif
+    
+    #if CONFIG_USE_EMOTE_MESSAGE_STYLE
+        SetMusicDetailsTraditional(song_title, artist, is_playing, "Emote mode");
+        return;
+    #endif
+    
+    // 默认模式：检查是否启用了音乐播放器界面
+    if (!IsMusicPlayerStyleEnabled()) {
+        SetMusicDetailsTraditional(song_title, artist, is_playing, "Traditional mode");
+        return;
+    }
+    
     if (is_playing && song_title && strlen(song_title) > 0) {
         ESP_LOGI(TAG, "Setting music details: '%s' by '%s' - showing music player", 
                  song_title, artist ? artist : "Unknown Artist");
@@ -1533,7 +1557,62 @@ void LcdDisplay::UpdateMusicProgress(float progress) {
 
 void LcdDisplay::UpdateMusicLyrics(const char* lyrics) {
     if (music_player_ui_) {
+        // 音乐播放器UI模式：设置到播放器界面
         music_player_ui_->SetLyrics(lyrics);
+    } else {
+        // 传统模式：限制歌词更新频率，避免性能问题
+        static uint32_t last_update_time = 0;
+        uint32_t current_time = esp_timer_get_time() / 1000; // 毫秒
+        
+        // 限制更新频率为每500ms一次，避免过于频繁的UI更新
+        if (current_time - last_update_time < 500) {
+            return;
+        }
+        last_update_time = current_time;
+        
+        if (chat_message_label_ && lyrics && strlen(lyrics) > 0) {
+            // 检查是否正在播放音乐（表情界面是否被隐藏）
+            bool is_music_playing = emoji_box_ && lv_obj_has_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
+            
+            if (is_music_playing) {
+                DisplayLockGuard lock(this);  // 确保线程安全
+                
+                // 针对小屏幕优化显示策略
+                if (width_ <= 128 && height_ <= 128) {
+                    // 小屏幕模式：有歌词就显示歌词，替换歌曲信息
+                    lv_label_set_text(chat_message_label_, lyrics);
+                    lv_label_set_long_mode(chat_message_label_, LV_LABEL_LONG_SCROLL_CIRCULAR);
+                    ESP_LOGI(TAG, "Small screen mode: Show lyrics: %.15s%s", 
+                             lyrics, strlen(lyrics) > 15 ? "..." : "");
+                } else {
+                    // 正常屏幕模式：显示歌曲信息 + 歌词
+                    const char* current_text = lv_label_get_text(chat_message_label_);
+                    
+                    // 检查当前文本是否包含歌曲信息（包含" - "的行）
+                    if (current_text && strstr(current_text, " - ") && !strstr(current_text, "\n")) {
+                        // 当前只有歌曲信息，添加歌词
+                        std::string display_text = std::string(current_text) + "\n" + std::string(lyrics);
+                        lv_label_set_text(chat_message_label_, display_text.c_str());
+                    } else if (current_text && strstr(current_text, " - ") && strstr(current_text, "\n")) {
+                        // 已经有歌曲信息和歌词，只更新歌词部分
+                        std::string current_str(current_text);
+                        size_t newline_pos = current_str.find('\n');
+                        if (newline_pos != std::string::npos) {
+                            std::string song_info = current_str.substr(0, newline_pos);
+                            std::string display_text = song_info + "\n" + std::string(lyrics);
+                            lv_label_set_text(chat_message_label_, display_text.c_str());
+                        }
+                    } else {
+                        // 没有歌曲信息，只显示歌词
+                        lv_label_set_text(chat_message_label_, lyrics);
+                    }
+                    
+                    lv_label_set_long_mode(chat_message_label_, LV_LABEL_LONG_WRAP);
+                    ESP_LOGI(TAG, "Normal screen mode: Updated lyrics: %.30s%s", 
+                             lyrics, strlen(lyrics) > 30 ? "..." : "");
+                }
+            }
+        }
     }
 }
 
@@ -1669,5 +1748,110 @@ void LcdDisplay::StopMusicProgressUpdate() {
         esp_timer_delete(music_progress_timer_);
         music_progress_timer_ = nullptr;
         ESP_LOGI(TAG, "Music progress update timer stopped");
+    }
+}
+
+bool LcdDisplay::IsMusicPlayerVisible() const {
+    return music_player_ui_ && music_player_ui_->IsVisible();
+}
+
+void LcdDisplay::SetMusicPlayerPlayState(MusicPlayerUI::PlayState state) {
+    if (music_player_ui_) {
+        music_player_ui_->SetPlayState(state);
+    }
+}
+
+bool LcdDisplay::IsMusicPlayerStyleEnabled() const {
+#ifdef CONFIG_USE_MUSIC_PLAYER_UI
+    return true;
+#else
+    return false;
+#endif
+}
+
+void LcdDisplay::SetMusicInfoTraditional(const char* text, const char* mode_name) {
+    if (chat_message_label_ == nullptr) {
+        return;
+    }
+    
+    if (text && strlen(text) > 0) {
+        // 暂停表情动画，但不销毁控制器
+        if (gif_controller_) {
+            gif_controller_->Stop();
+            ESP_LOGI(TAG, "Paused GIF animation for traditional music playback");
+        }
+        
+        // 隐藏表情界面，节省CPU资源
+        if (emoji_box_) {
+            lv_obj_add_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
+            ESP_LOGI(TAG, "Hidden emoji interface during traditional music playback");
+        }
+        
+        // 确保聊天消息标签是可见的，用于显示歌曲信息
+        lv_obj_remove_flag(chat_message_label_, LV_OBJ_FLAG_HIDDEN);
+        
+        lv_label_set_text(chat_message_label_, text);
+        lv_label_set_long_mode(chat_message_label_, LV_LABEL_LONG_WRAP);
+        ESP_LOGI(TAG, "%s: Set music info in chat message: %s", mode_name, text);
+    } else {
+        // 播放结束，恢复表情界面
+        if (emoji_box_) {
+            lv_obj_remove_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
+            ESP_LOGI(TAG, "Restored emoji interface after traditional music playback ended");
+            
+            // 重新设置默认表情来恢复表情显示
+            SetEmotion("neutral");
+            ESP_LOGI(TAG, "Restored neutral emotion after traditional music playback");
+        }
+        
+        // 清空歌曲信息显示
+        lv_label_set_text(chat_message_label_, "");
+        ESP_LOGI(TAG, "%s: Cleared music info", mode_name);
+    }
+}
+
+void LcdDisplay::SetMusicDetailsTraditional(const char* title, const char* artist, bool is_playing, const char* mode_name) {
+    if (chat_message_label_ == nullptr) {
+        return;
+    }
+    
+    if (is_playing && title && strlen(title) > 0) {
+        // 暂停表情动画，但不销毁控制器
+        if (gif_controller_) {
+            gif_controller_->Stop();
+            ESP_LOGI(TAG, "Paused GIF animation for traditional music playback");
+        }
+        
+        // 隐藏表情界面，节省CPU资源
+        if (emoji_box_) {
+            lv_obj_add_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
+            ESP_LOGI(TAG, "Hidden emoji interface during traditional music playback");
+        }
+        
+        // 确保聊天消息标签是可见的，用于显示歌曲信息
+        lv_obj_remove_flag(chat_message_label_, LV_OBJ_FLAG_HIDDEN);
+        
+        // 构建并显示歌曲信息
+        std::string display_text = title;
+        if (artist && strlen(artist) > 0) {
+            display_text += " - " + std::string(artist);
+        }
+        lv_label_set_text(chat_message_label_, display_text.c_str());
+        lv_label_set_long_mode(chat_message_label_, LV_LABEL_LONG_WRAP);
+        ESP_LOGI(TAG, "%s: Set music details in chat message: %s", mode_name, display_text.c_str());
+    } else {
+        // 播放结束，恢复表情界面
+        if (emoji_box_) {
+            lv_obj_remove_flag(emoji_box_, LV_OBJ_FLAG_HIDDEN);
+            ESP_LOGI(TAG, "Restored emoji interface after traditional music playback ended");
+            
+            // 重新设置默认表情来恢复表情显示
+            SetEmotion("neutral");
+            ESP_LOGI(TAG, "Restored neutral emotion after traditional music playback");
+        }
+        
+        // 清空歌曲信息显示
+        lv_label_set_text(chat_message_label_, "");
+        ESP_LOGI(TAG, "%s: Cleared music details", mode_name);
     }
 }

@@ -27,10 +27,6 @@ struct AudioChunk {
 
 class Esp32Music : public Music {
 public:
-    // 显示模式控制 - 移动到public区域
-    enum DisplayMode {
-        DISPLAY_MODE_LYRICS = 0     // 只显示歌词
-    };
 
 private:
     std::string last_downloaded_data_;
@@ -48,10 +44,10 @@ private:
     std::thread lyric_thread_;
     std::atomic<bool> is_lyric_running_;
     
-    std::atomic<DisplayMode> display_mode_;
     std::atomic<bool> is_playing_;
     std::atomic<bool> is_paused_;
     std::atomic<bool> is_downloading_;
+    int64_t pause_start_time_;  // 暂停开始时间，用于超时检测
     std::thread play_thread_;
     std::thread download_thread_;
     int64_t current_play_time_ms_;  // 当前播放时间(毫秒)
@@ -80,6 +76,9 @@ private:
     void CleanupMp3Decoder();
     void ResetSampleRate();  // 重置采样率到原始值
     
+    // 线程管理辅助方法
+    void SafeJoinThread(std::thread& thread, const std::string& thread_name, int timeout_ms = 5000);
+    
     // 歌词相关私有方法
     bool DownloadLyrics(const std::string& lyric_url);
     bool ParseLyrics(const std::string& lyric_content);
@@ -105,10 +104,6 @@ public:
     virtual size_t GetBufferSize() const override { return buffer_size_; }
     virtual bool IsDownloading() const override { return is_downloading_; }
     virtual int16_t* GetAudioData() override { return final_pcm_data_fft; }
-    
-    // 显示模式控制方法
-    void SetDisplayMode(DisplayMode mode);
-    DisplayMode GetDisplayMode() const { return display_mode_.load(); }
     
     // 播放控制和进度方法
     bool PauseStreaming();   // 暂停播放

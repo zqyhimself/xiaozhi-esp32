@@ -14,8 +14,11 @@ static const char* TAG = "MusicPlayerUI";
 
 // 颜色定义（方便统一修改）
 #define COLOR_PRIMARY           0x2196F3    // 主色调 - 蓝色（播放按钮、所有进度条指示器）
-#define COLOR_PROGRESS_BG       0x404040    // 统一进度条背景色 - 深灰色（音量条和时间进度条共用）
+#define COLOR_PROGRESS_BG_LIGHT 0xE0E0E0    // 浅色主题进度条背景色 - 浅灰色
+#define COLOR_PROGRESS_BG_DARK  0x404040    // 深色主题进度条背景色 - 深灰色
 #define COLOR_TEXT_DEFAULT      0x000000    // 默认文字颜色 - 黑色
+#define COLOR_TEXT_BG_LIGHT     0xFFFFFF    // 浅色主题文字背景颜色 - 白色
+#define COLOR_TEXT_BG_DARK      0x333333    // 深色主题文字背景颜色 - 深灰色
 #define COLOR_BACKGROUND_WHITE  0xFFFFFF    // 白色背景
 
 // 字体获取宏定义（方便统一管理）
@@ -27,6 +30,12 @@ static const char* TAG = "MusicPlayerUI";
 // 颜色获取宏定义（优先使用主题颜色，回退到默认颜色）
 #define GET_TEXT_COLOR(theme)   ((theme) ? (theme)->text_color() : lv_color_hex(COLOR_TEXT_DEFAULT))
 #define GET_PRIMARY_COLOR(theme) ((theme) ? (theme)->text_color() : lv_color_hex(COLOR_PRIMARY))
+
+// 根据主题判断是否为浅色主题（通过文字颜色判断）
+// 浅色主题：黑色文字(0xFF000000)，深色主题：白色文字(0xFFFFFFFF)
+#define IS_LIGHT_THEME(theme) ((theme) && lv_color_to_u32((theme)->text_color()) == 0xFF000000)
+#define GET_TEXT_BG_COLOR(theme) (IS_LIGHT_THEME(theme) ? lv_color_hex(COLOR_TEXT_BG_LIGHT) : lv_color_hex(COLOR_TEXT_BG_DARK))
+#define GET_PROGRESS_BG_COLOR(theme) (IS_LIGHT_THEME(theme) ? lv_color_hex(COLOR_PROGRESS_BG_LIGHT) : lv_color_hex(COLOR_PROGRESS_BG_DARK))
 
 MusicPlayerUI::MusicPlayerUI(lv_obj_t* parent, int width, int height, LvglTheme* theme)
     : parent_(parent), container_(nullptr), song_info_label_(nullptr),
@@ -137,7 +146,10 @@ void MusicPlayerUI::CreateUI() {
     lv_slider_set_value(volume_slider_, current_volume_, LV_ANIM_OFF);
     // 滑块样式
     // 音量滑块样式设置 - 统一使用主题色
-    lv_obj_set_style_bg_color(volume_slider_, lv_color_hex(COLOR_PROGRESS_BG), LV_PART_MAIN);  // 背景深灰色
+    lv_color_t progress_bg_color = GET_PROGRESS_BG_COLOR(theme_);
+    lv_obj_set_style_bg_color(volume_slider_, progress_bg_color, LV_PART_MAIN);  // 跟随主题的进度条背景色
+    
+    // 主题颜色已正确应用
     lv_obj_set_style_bg_opa(volume_slider_, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_bg_color(volume_slider_, GET_PRIMARY_COLOR(theme_), LV_PART_INDICATOR);  // 指示器使用主题主色调
     lv_obj_set_style_bg_opa(volume_slider_, LV_OPA_COVER, LV_PART_INDICATOR);
@@ -165,13 +177,13 @@ void MusicPlayerUI::CreateUI() {
     if (theme_) {
         lv_obj_set_style_text_font(song_info_label_, theme_->text_font()->font(), 0);
         lv_obj_set_style_text_color(song_info_label_, theme_->text_color(), 0);
-        lv_obj_set_style_bg_color(song_info_label_, theme_->assistant_bubble_color(), 0);
-        lv_obj_set_style_bg_opa(song_info_label_, LV_OPA_30, 0);  // 半透明背景
+        lv_obj_set_style_bg_color(song_info_label_, GET_PROGRESS_BG_COLOR(theme_), 0);  // 使用与进度条相同的背景色
+        lv_obj_set_style_bg_opa(song_info_label_, LV_OPA_60, 0);  // 稍微增加不透明度以便更好显示
     } else {
         lv_obj_set_style_text_font(song_info_label_, LV_FONT_DEFAULT, 0);
-        lv_obj_set_style_text_color(song_info_label_, lv_color_hex(0x000000), 0);
-        lv_obj_set_style_bg_color(song_info_label_, lv_color_hex(0xFFFFFF), 0);
-        lv_obj_set_style_bg_opa(song_info_label_, LV_OPA_30, 0);
+        lv_obj_set_style_text_color(song_info_label_, lv_color_hex(COLOR_TEXT_DEFAULT), 0);
+        lv_obj_set_style_bg_color(song_info_label_, lv_color_hex(COLOR_PROGRESS_BG_LIGHT), 0);  // 无主题时使用浅色背景
+        lv_obj_set_style_bg_opa(song_info_label_, LV_OPA_60, 0);  // 稍微增加不透明度以便更好显示
     }
     lv_obj_set_style_radius(song_info_label_, 8, 0);  // 圆角
     
@@ -280,7 +292,7 @@ void MusicPlayerUI::CreateUI() {
     lv_bar_set_range(progress_bar_, 0, 1000);
     lv_bar_set_value(progress_bar_, 0, LV_ANIM_OFF);
     // 使用统一定义的颜色
-    lv_obj_set_style_bg_color(progress_bar_, lv_color_hex(COLOR_PROGRESS_BG), LV_PART_MAIN);  // 进度条背景色
+    lv_obj_set_style_bg_color(progress_bar_, GET_PROGRESS_BG_COLOR(theme_), LV_PART_MAIN);  // 跟随主题的进度条背景色
     lv_obj_set_style_bg_opa(progress_bar_, LV_OPA_COVER, LV_PART_MAIN);  // 确保背景不透明
     lv_obj_set_style_bg_color(progress_bar_, GET_PRIMARY_COLOR(theme_), LV_PART_INDICATOR);  // 使用主题主色调
     lv_obj_set_style_bg_opa(progress_bar_, LV_OPA_COVER, LV_PART_INDICATOR);  // 确保进度不透明
@@ -588,7 +600,8 @@ void MusicPlayerUI::UpdateTheme(LvglTheme* theme) {
     if (song_info_label_) {
         lv_obj_set_style_text_font(song_info_label_, theme_->text_font()->font(), 0);
         lv_obj_set_style_text_color(song_info_label_, theme_->text_color(), 0);
-        ESP_LOGI(TAG, "Updated song info label theme");
+        lv_obj_set_style_bg_color(song_info_label_, GET_PROGRESS_BG_COLOR(theme_), 0);  // 更新背景色与进度条一致
+        ESP_LOGI(TAG, "Updated song info label theme with progress background color");
     }
     
     if (music_icon_label_) {
@@ -613,6 +626,17 @@ void MusicPlayerUI::UpdateTheme(LvglTheme* theme) {
             lv_obj_set_style_text_color(vol_value_label, theme_->text_color(), 0);
             ESP_LOGI(TAG, "Updated volume value label theme");
         }
+    }
+    
+    // 更新进度条背景色
+    if (volume_slider_) {
+        lv_obj_set_style_bg_color(volume_slider_, GET_PROGRESS_BG_COLOR(theme_), LV_PART_MAIN);
+        ESP_LOGI(TAG, "Updated volume slider background theme");
+    }
+    
+    if (progress_bar_) {
+        lv_obj_set_style_bg_color(progress_bar_, GET_PROGRESS_BG_COLOR(theme_), LV_PART_MAIN);
+        ESP_LOGI(TAG, "Updated progress bar background theme");
     }
     
     ESP_LOGI(TAG, "Music player UI theme updated");

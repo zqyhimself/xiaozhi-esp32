@@ -131,11 +131,11 @@ static std::string url_encode(const std::string& str) {
 Esp32Music::Esp32Music() : last_downloaded_data_(), current_music_url_(), current_song_name_(), current_artist_(),
                          song_name_displayed_(false), current_lyric_url_(), lyrics_(), 
                          current_lyric_index_(-1), lyric_thread_(), is_lyric_running_(false),
-                         display_mode_(DISPLAY_MODE_LYRICS), is_playing_(false), is_paused_(false), is_downloading_(false), 
+                         is_playing_(false), is_paused_(false), is_downloading_(false), pause_start_time_(0),
                          play_thread_(), download_thread_(), current_play_time_ms_(0), last_frame_time_ms_(0), total_duration_ms_(0),
                          audio_buffer_(), buffer_mutex_(), buffer_cv_(), buffer_size_(0), mp3_decoder_(nullptr), mp3_frame_info_(), 
                          mp3_decoder_initialized_(false) {
-    ESP_LOGI(TAG, "Music player initialized with lyrics display mode");
+    ESP_LOGI(TAG, "Music player initialized with lyrics display");
     InitializeMp3Decoder();
 }
 
@@ -407,39 +407,39 @@ bool Esp32Music::Download(const std::string& song_name, const std::string& artis
                 ESP_LOGI(TAG, "方便面的工作室编译版本");
                 ESP_LOGI(TAG, "Starting streaming playback for: %s", song_name.c_str());
                 song_name_displayed_ = false;  // 重置歌名显示标志
+                
+                // 在开始播放前确保设备处于合适状态，避免第一次播放卡顿
+                auto& app = Application::GetInstance();
+                DeviceState current_state = app.GetDeviceState();
+                if (current_state == kDeviceStateSpeaking) {
+                    ESP_LOGI(TAG, "Device is speaking, switching to idle before music playback");
+                    app.ToggleChatState(); // 切换到待机状态
+                    vTaskDelay(pdMS_TO_TICKS(200)); // 等待状态切换完成
+                }
+                
                 StartStreaming(current_music_url_);
                 
-                // 处理歌词URL - 只有在歌词显示模式下才启动歌词
+                // 处理歌词URL - 有歌词就直接显示
                 if (cJSON_IsString(lyric_url) && lyric_url->valuestring && strlen(lyric_url->valuestring) > 0) {
                     // 直接使用歌词URL
                     std::string lyric_path = lyric_url->valuestring;
                     current_lyric_url_ = lyric_path;
                     
-                    // 根据显示模式决定是否启动歌词
-                    if (display_mode_ == DISPLAY_MODE_LYRICS) {
-                        ESP_LOGI(TAG, "Loading lyrics for: %s (lyrics display mode)", song_name.c_str());
-                        
-                        // 启动歌词下载和显示
-                        if (is_lyric_running_) {
-                            is_lyric_running_ = false;
-                            if (lyric_thread_.joinable()) {
-                                lyric_thread_.join();
-                            }
-                        }
-                        
-                        // 确保线程对象处于可赋值状态
+                    ESP_LOGI(TAG, "Loading lyrics for: %s", song_name.c_str());
+                    
+                    // 停止之前的歌词线程
+                    if (is_lyric_running_) {
+                        is_lyric_running_ = false;
                         if (lyric_thread_.joinable()) {
                             lyric_thread_.join();
                         }
-                        
-                        is_lyric_running_ = true;
-                        current_lyric_index_ = -1;
-                        lyrics_.clear();
-                        
-                        lyric_thread_ = std::thread(&Esp32Music::LyricDisplayThread, this);
-                    } else {
-                        ESP_LOGI(TAG, "Lyric URL found, loading lyrics");
                     }
+                    
+                    is_lyric_running_ = true;
+                    current_lyric_index_ = -1;
+                    lyrics_.clear();
+                    
+                    lyric_thread_ = std::thread(&Esp32Music::LyricDisplayThread, this);
                 } else {
                     ESP_LOGW(TAG, "No lyric URL found for this song");
                 }
@@ -628,91 +628,35 @@ bool Esp32Music::StopStreaming() {
         buffer_cv_.notify_all();
     }
     
-    // 等待歌词线程结束
+    // 等待歌词线程结束（使用超时机制避免死锁）
     if (lyric_thread_.joinable()) {
-        try {
-            lyric_thread_.join();
-            ESP_LOGI(TAG, "Lyric thread joined in StopStreaming");
-        } catch (const std::exception& e) {
-            ESP_LOGW(TAG, "Exception during lyric thread join: %s", e.what());
-            // 如果join失败，尝试detach避免资源泄露
-            try {
-                lyric_thread_.detach();
-                ESP_LOGW(TAG, "Lyric thread detached after join failure");
-            } catch (const std::exception& e2) {
-                ESP_LOGE(TAG, "Failed to detach lyric thread: %s", e2.what());
-            }
-        }
-    }
-    
-    // 等待线程结束（避免重复代码，让StopStreaming也能等待线程完全停止）
-    if (download_thread_.joinable()) {
-        try {
-            download_thread_.join();
-            ESP_LOGI(TAG, "Download thread joined in StopStreaming");
-        } catch (const std::exception& e) {
-            ESP_LOGW(TAG, "Exception during download thread join: %s", e.what());
-            // 如果join失败，尝试detach避免资源泄露
-            try {
-                download_thread_.detach();
-                ESP_LOGW(TAG, "Download thread detached after join failure");
-            } catch (const std::exception& e2) {
-                ESP_LOGE(TAG, "Failed to detach download thread: %s", e2.what());
-            }
-        }
-    }
-    
-    // 等待播放线程结束，使用更安全的方式
-    if (play_thread_.joinable()) {
-        // 先设置停止标志
-        is_playing_ = false;
+        ESP_LOGI(TAG, "Waiting for lyric thread to finish...");
         
-        // 通知条件变量，确保线程能够退出
+        // 等待线程自然结束，最多等待2秒
+        int wait_count = 0;
+        const int max_wait = 200; // 最多等待2秒
+        
+        while (is_lyric_running_ && wait_count < max_wait) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            wait_count++;
+        }
+        
+        SafeJoinThread(lyric_thread_, "lyric");
+    }
+    
+    // 等待下载线程结束
+    SafeJoinThread(download_thread_, "download");
+    
+    // 等待播放线程结束
+    if (play_thread_.joinable()) {
+        // 先设置停止标志并通知条件变量，确保线程能够退出
+        is_playing_ = false;
         {
             std::lock_guard<std::mutex> lock(buffer_mutex_);
             buffer_cv_.notify_all();
         }
         
-        // 使用超时机制等待线程结束，避免死锁
-        bool thread_finished = false;
-        int wait_count = 0;
-        const int max_wait = 100; // 最多等待1秒
-        
-        while (!thread_finished && wait_count < max_wait) {
-            vTaskDelay(pdMS_TO_TICKS(10));
-            wait_count++;
-            
-            // 检查线程是否仍然可join
-            if (!play_thread_.joinable()) {
-                thread_finished = true;
-                break;
-            }
-        }
-        
-        if (play_thread_.joinable()) {
-            if (wait_count >= max_wait) {
-                ESP_LOGW(TAG, "Play thread join timeout, detaching thread");
-                try {
-                    play_thread_.detach();
-                } catch (const std::exception& e) {
-                    ESP_LOGE(TAG, "Exception during play thread detach: %s", e.what());
-                }
-            } else {
-                try {
-                    play_thread_.join();
-                    ESP_LOGI(TAG, "Play thread joined in StopStreaming");
-                } catch (const std::exception& e) {
-                    ESP_LOGW(TAG, "Exception during play thread join: %s", e.what());
-                    // 如果join失败，尝试detach避免资源泄露
-                    try {
-                        play_thread_.detach();
-                        ESP_LOGW(TAG, "Play thread detached after join failure");
-                    } catch (const std::exception& e2) {
-                        ESP_LOGE(TAG, "Failed to detach play thread: %s", e2.what());
-                    }
-                }
-            }
-        }
+        SafeJoinThread(play_thread_, "play", 1000); // 1秒超时
     }
     
     // 重置MP3解码器状态，避免下次播放时有残留声音
@@ -778,6 +722,27 @@ void Esp32Music::DownloadAudioStream(const std::string& music_url) {
     size_t total_downloaded = 0;
     
     while (is_downloading_ && is_playing_) {
+        // 暂停时暂停下载，减少网络连接超时的风险
+        if (is_paused_.load()) {
+            int pause_wait_count = 0;
+            while (is_paused_.load() && is_downloading_ && is_playing_) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1000)); // 每秒检查一次
+                pause_wait_count++;
+                
+                // 如果暂停超过60秒，主动断开连接避免服务器超时
+                if (pause_wait_count >= 60) {
+                    ESP_LOGI(TAG, "Long pause detected in download, stopping download to avoid timeout");
+                    is_downloading_ = false;
+                    break;
+                }
+            }
+            
+            if (!is_downloading_ || !is_playing_) {
+                break;
+            }
+            continue;
+        }
+        
         int bytes_read = http->Read(buffer, chunk_size);
         if (bytes_read < 0) {
             ESP_LOGE(TAG, "Failed to read audio data: error code %d", bytes_read);
@@ -832,9 +797,9 @@ void Esp32Music::DownloadAudioStream(const std::string& music_url) {
         // 等待缓冲区有空间
         {
             std::unique_lock<std::mutex> lock(buffer_mutex_);
-            buffer_cv_.wait(lock, [this] { return buffer_size_ < MAX_BUFFER_SIZE || !is_downloading_; });
+            buffer_cv_.wait(lock, [this] { return buffer_size_ < MAX_BUFFER_SIZE || !is_downloading_ || is_paused_.load(); });
             
-            if (is_downloading_) {
+            if (is_downloading_ && !is_paused_.load()) {
                 audio_buffer_.push(AudioChunk(chunk_data, bytes_read));
                 buffer_size_ += bytes_read;
                 total_downloaded += bytes_read;
@@ -847,7 +812,10 @@ void Esp32Music::DownloadAudioStream(const std::string& music_url) {
                 }
             } else {
                 heap_caps_free(chunk_data);
-                break;
+                if (!is_downloading_) {
+                    break;
+                }
+                // 如果是暂停状态，释放当前chunk并继续循环
             }
         }
     }
@@ -874,8 +842,8 @@ void Esp32Music::PlayAudioStream() {
     total_frames_decoded_ = 0;
     
     auto codec = Board::GetInstance().GetAudioCodec();
-    if (!codec || !codec->output_enabled()) {
-        ESP_LOGE(TAG, "Audio codec not available or not enabled");
+    if (!codec) {
+        ESP_LOGE(TAG, "Audio codec not available");
         is_playing_ = false;
         
         // 通知用户播放失败
@@ -886,6 +854,12 @@ void Esp32Music::PlayAudioStream() {
             ESP_LOGI(TAG, "Notified user about playback failure due to codec unavailable");
         }
         return;
+    }
+    
+    // 确保音频输出启用，如果未启用则启用它
+    if (!codec->output_enabled()) {
+        ESP_LOGI(TAG, "Audio output disabled, enabling for music playback");
+        codec->EnableOutput(true);
     }
     
     if (!mp3_decoder_initialized_) {
@@ -924,13 +898,21 @@ void Esp32Music::PlayAudioStream() {
     int bytes_left = 0;
     uint8_t* read_ptr = nullptr;
     
-    // 分配MP3输入缓冲区
+    // 分配MP3输入缓冲区 - 使用RAII管理内存
     mp3_input_buffer = (uint8_t*)heap_caps_malloc(8192, MALLOC_CAP_SPIRAM);
     if (!mp3_input_buffer) {
         ESP_LOGE(TAG, "Failed to allocate MP3 input buffer");
         is_playing_ = false;
         return;
     }
+    
+    // 确保在函数退出时释放缓冲区
+    auto buffer_guard = [](uint8_t* buffer) {
+        if (buffer) {
+            heap_caps_free(buffer);
+        }
+    };
+    std::unique_ptr<uint8_t, decltype(buffer_guard)> buffer_ptr(mp3_input_buffer, buffer_guard);
     
     // 标记是否已经处理过ID3标签
     bool id3_processed = false;
@@ -960,12 +942,12 @@ void Esp32Music::PlayAudioStream() {
             }
             // 切换状态
             app.ToggleChatState(); // 变成待机状态
-            vTaskDelay(pdMS_TO_TICKS(300));
+            vTaskDelay(pdMS_TO_TICKS(100)); // 减少延迟，提高响应速度
             continue;
         } else if (current_state != kDeviceStateIdle) { // 不是待机状态，就一直卡在这里，不让播放音乐
             ESP_LOGD(TAG, "Device state is %d, pausing music playback", current_state);
             // 如果不是空闲状态，暂停播放
-            vTaskDelay(pdMS_TO_TICKS(50));
+            vTaskDelay(pdMS_TO_TICKS(100)); // 增加延迟，减少CPU占用
             continue;
         }
         
@@ -983,8 +965,8 @@ void Esp32Music::PlayAudioStream() {
                          !current_artist_.empty() ? current_artist_.c_str() : "Unknown Artist");
                 song_name_displayed_ = true;
                 
-                // 根据显示模式启动相应的显示功能
-                ESP_LOGI(TAG, "Lyrics display mode active");
+                // 歌词显示已启动
+                ESP_LOGI(TAG, "Lyrics display active");
             }
         }
         
@@ -1103,8 +1085,7 @@ void Esp32Music::PlayAudioStream() {
             }
             
             // 更新歌词显示
-                int buffer_latency_ms = 600; // 实测调整值
-                UpdateLyricDisplay(current_play_time_ms_ + buffer_latency_ms);
+                UpdateLyricDisplay(current_play_time_ms_);
             
             // 将PCM数据发送到Application的音频解码队列
             if (mp3_frame_info_.outputSamps > 0) {
@@ -1198,10 +1179,7 @@ void Esp32Music::PlayAudioStream() {
         }
     }
     
-    // 清理
-    if (mp3_input_buffer) {
-        heap_caps_free(mp3_input_buffer);
-    }
+    // MP3缓冲区由RAII自动清理，无需手动释放
     
     // 播放结束时进行基本清理，但不调用StopStreaming避免线程自我等待
     ESP_LOGI(TAG, "Audio stream playback finished, total played: %d bytes", total_played);
@@ -1214,12 +1192,8 @@ void Esp32Music::PlayAudioStream() {
     // 清理音频缓冲区释放内存
     ClearAudioBuffer();
     
-    // 停止歌词线程
+    // 停止歌词线程（不在播放线程中join，避免死锁）
     is_lyric_running_ = false;
-    if (lyric_thread_.joinable()) {
-        lyric_thread_.join();
-        ESP_LOGI(TAG, "Lyric thread stopped and joined");
-    }
     
     // 清理歌词数据释放内存
     lyrics_.clear();
@@ -1672,12 +1646,6 @@ void Esp32Music::UpdateLyricDisplay(int64_t current_time_ms) {
 
 // 删除复杂的认证验证和配置方法，使用简单的静态函数
 
-// 显示模式控制方法实现
-void Esp32Music::SetDisplayMode(DisplayMode mode) {
-    display_mode_ = mode;
-    
-    ESP_LOGI(TAG, "Display mode set to LYRICS (spectrum mode removed)");
-}
 
 // 暂停播放
 bool Esp32Music::PauseStreaming() {
@@ -1687,6 +1655,8 @@ bool Esp32Music::PauseStreaming() {
     }
     
     is_paused_ = true;
+    // 记录暂停时间，用于判断是否需要重连
+    pause_start_time_ = esp_timer_get_time();
     ESP_LOGI(TAG, "Music playback paused");
     return true;
 }
@@ -1713,8 +1683,80 @@ bool Esp32Music::ResumeStreaming() {
         vTaskDelay(pdMS_TO_TICKS(100)); // 短暂延迟确保状态切换
     }
     
+    // 检查暂停时长，如果超过30秒认为可能网络连接已断开
+    int64_t pause_duration_us = esp_timer_get_time() - pause_start_time_;
+    int64_t pause_duration_ms = pause_duration_us / 1000;
+    
+    // 检查是否需要重新启动下载线程（统一逻辑，避免重复）
+    if (!is_downloading_.load()) {
+        std::lock_guard<std::mutex> lock(buffer_mutex_);
+        if (audio_buffer_.empty() && !current_music_url_.empty()) {
+            if (pause_duration_ms > 30000) {
+                ESP_LOGI(TAG, "Long pause detected (%lld ms), restarting download", pause_duration_ms);
+            } else {
+                ESP_LOGI(TAG, "Download stopped during pause, restarting download");
+            }
+            
+            // 确保旧的下载线程已完全清理
+            if (download_thread_.joinable()) {
+                ESP_LOGW(TAG, "Warning: download thread still joinable, cleaning up");
+                SafeJoinThread(download_thread_, "download-cleanup");
+            }
+            
+            // 重新启动下载线程
+            is_downloading_ = true;
+            download_thread_ = std::thread(&Esp32Music::DownloadAudioStream, this, current_music_url_);
+        }
+    }
+    
     is_paused_ = false;
     buffer_cv_.notify_all();  // 唤醒可能等待的播放线程
     ESP_LOGI(TAG, "Music playback resumed");
     return true;
+}
+
+// 统一的线程安全清理函数
+void Esp32Music::SafeJoinThread(std::thread& thread, const std::string& thread_name, int timeout_ms) {
+    if (!thread.joinable()) {
+        return;
+    }
+    
+    ESP_LOGI(TAG, "Joining %s thread", thread_name.c_str());
+    
+    try {
+        // 对于播放线程，使用超时机制
+        if (thread_name == "play") {
+            auto start_time = esp_timer_get_time();
+            bool joined = false;
+            
+            while (!joined && (esp_timer_get_time() - start_time) < (timeout_ms * 1000)) {
+                if (!thread.joinable()) {
+                    joined = true;
+                    break;
+                }
+                vTaskDelay(pdMS_TO_TICKS(10));
+            }
+            
+            if (!joined && thread.joinable()) {
+                ESP_LOGW(TAG, "%s thread join timeout, detaching", thread_name.c_str());
+                thread.detach();
+                return;
+            }
+        }
+        
+        if (thread.joinable()) {
+            thread.join();
+            ESP_LOGI(TAG, "%s thread joined successfully", thread_name.c_str());
+        }
+    } catch (const std::exception& e) {
+        ESP_LOGW(TAG, "Exception during %s thread join: %s", thread_name.c_str(), e.what());
+        try {
+            if (thread.joinable()) {
+                thread.detach();
+                ESP_LOGW(TAG, "%s thread detached after join failure", thread_name.c_str());
+            }
+        } catch (const std::exception& e2) {
+            ESP_LOGE(TAG, "Failed to detach %s thread: %s", thread_name.c_str(), e2.what());
+        }
+    }
 }

@@ -9,6 +9,9 @@
 #include "mcp_server.h"
 #include "assets.h"
 #include "settings.h"
+#include "boards/common/esp32_music.h"
+#include "display/lcd_display.h"
+#include "display/music_player_ui.h"
 
 #include <cstring>
 #include <esp_log.h>
@@ -681,15 +684,22 @@ void Application::SetDeviceState(DeviceState state) {
     auto led = board.GetLed();
     led->OnStateChanged();
 
-    // 当从idle状态变成其他任何状态时，停止音乐播放
+    // 当从idle状态变成其他任何状态时，停止所有音乐（语音唤醒/手动打断）
+    // 无论音乐是播放还是暂停状态，都需要完全停止以确保语音交互正常
     if (previous_state == kDeviceStateIdle && state != kDeviceStateIdle) {
         auto music = board.GetMusic();
         if (music) {
-            ESP_LOGI(TAG, "Stopping music streaming due to state change: %s -> %s", 
-                    STATE_STRINGS[previous_state], STATE_STRINGS[state]);
-            music->StopStreaming();
+            auto esp32_music = dynamic_cast<Esp32Music*>(music);
+            if (esp32_music && esp32_music->IsPlaying()) {
+                // 完全停止音乐，销毁连接（用于语音唤醒和手动打断）
+                ESP_LOGI(TAG, "Stopping music for voice interaction: %s -> %s", 
+                        STATE_STRINGS[previous_state], STATE_STRINGS[state]);
+                esp32_music->StopStreaming();
+            }
         }
     }
+
+    // 语音交互结束后，手动暂停的音乐保持暂停状态，被停止的音乐不会自动恢复
 
     switch (state) {
         case kDeviceStateUnknown:
@@ -885,7 +895,7 @@ void Application::SetAecMode(AecMode mode) {
 // 新增：接收外部音频数据（如音乐播放）
 void Application::AddAudioData(AudioStreamPacket&& packet) {
     auto codec = Board::GetInstance().GetAudioCodec();
-    if (device_state_ == kDeviceStateIdle && codec->output_enabled()) {
+    if (device_state_ == kDeviceStateIdle) {
         // packet.payload包含的是原始PCM数据（int16_t）
         if (packet.payload.size() >= 2) {
             size_t num_samples = packet.payload.size() / sizeof(int16_t);
